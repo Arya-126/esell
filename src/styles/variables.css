@@ -1,0 +1,32 @@
+:root {
+  /* Brand Colors */
+  --primary-color: #6366f1; /* Indigo 500 */
+  --primary-hover: #4f46e5; /* Indigo 600 */
+  --secondary-color: #ec4899; /* Pink 500 */
+  --accent-color: #8b5cf6; /* Violet 500 */
+
+  /* Dark Mode Palette (Default) */
+  --bg-body: #0f172a; /* Slate 900 */
+  --bg-surface: #1e293b; /* Slate 800 */
+  --bg-surface-glass: rgba(30, 41, 59, 0.7);
+  
+  /* Text Colors */
+  --text-main: #f8fafc; /* Slate 50 */
+  --text-muted: #94a3b8; /* Slate 400 */
+  
+  /* Borders & Effects */
+  --border-color: rgba(148, 163, 184, 0.1);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
+  --glass-blur: blur(12px);
+  --radius-lg: 12px;
+  --radius-md: 8px;
+
+  /* Gradients */
+  --gradient-primary: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+}
+
+body {
+  background-color: var(--bg-body);
+  color: var(--text-main);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
