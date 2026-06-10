@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Product · ReWear</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="js/app.js"></script>
+  <script>renderNav('');</script>
+
+  <div class="container" id="root"><div class="empty">Loading…</div></div>
+
+  <!-- Offer modal -->
+  <div class="modal-bg" id="offerModal">
+    <div class="modal">
+      <h2>🤝 Make an offer</h2>
+      <p class="muted" id="offerSub"></p>
+      <label>Your offer (USD)</label>
+      <input id="offerAmount" type="number" min="1" step="0.01" placeholder="e.g. 40" />
+      <div class="row" style="margin-top:18px;justify-content:flex-end">
+        <button class="btn ghost" onclick="closeOffer()">Cancel</button>
+        <button class="btn" id="sendOfferBtn">Send offer</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const id = new URLSearchParams(location.search).get('id');
+    const root = document.getElementById('root');
+    let PRODUCT = null;
+
+    function condColor(c) { return c === 'New' || c === 'Like New' ? 'var(--brand)' : 'var(--muted)'; }
+
+    async function load() {
+      try {
+        const { product } = await api('/products/' + id);
+        PRODUCT = product;
+        render(product);
+      } catch (e) { root.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+    }
+
+    function render(p) {
+      const me = Auth.user;
+      const isOwner = me && me.id === p.sellerId;
+      const sold = p.status === 'sold';
+      const reserved = p.status === 'reserved';
+      const img = p.image ? `<img src="${p.image}" style="border-radius:14px;border:1px solid var(--border);width:100%;object-fit:cover;max-height:520px" />`
+                          : `<div class="thumb" style="height:380px;border-radius:14px;font-size:60px;display:grid;place-items:center;background:var(--surface-2)">🖼️</div>`;
+      const fair = p.fair && p.fair.label !== 'No data'
+        ? `<div class="pill-row"><span class="tag ${p.fair.label==='Great deal'?'deal':p.fair.label==='Above average'?'high':''}">${p.fair.label}</span>
+           <span class="muted" style="font-size:12px">vs ~$${p.fair.avg} avg in ${esc(p.category)}</span></div>` : '';
+
+      root.innerHTML = `
+        <a href="index.html" class="muted">← Back to marketplace</a>
+        <div class="row wrap" style="align-items:flex-start;gap:28px;margin-top:14px">
+          <div style="flex:1;min-width:300px">${img}</div>
+          <div style="flex:1;min-width:300px">
+            <div class="row between">
+              <span class="tag cond">${esc(p.condition)}</span>
+              ${sold ? '<span class="tag high">SOLD</span>' : reserved ? '<span class="tag high">SALE PENDING</span>' : ''}
+            </div>
+            <h1 style="margin-top:10px">${esc(p.title)}</h1>
+            <div class="price" style="font-size:34px;font-weight:800;color:var(--brand)">$${p.price}</div>
+            ${fair}
+            <div class="pill-row">
+              <span class="tag eco">🌱 Saves ~${p.ecoSaved}kg CO₂ vs buying new</span>
+              <span class="tag">👁️ ${p.views || 0} views</span>
+              <span class="tag">⭐ ${p.watchCount} watching</span>
+            </div>
+
+            <div class="card" style="margin:16px 0;padding:14px">
+              <div class="row between">
+                <div>
+                  <div class="muted" style="font-size:12px">Seller</div>
+                  <a href="seller.html?id=${p.seller?.id}"><strong>${esc(p.seller?.name || 'Unknown')}</strong></a>
+                </div>
+                ${trustBadge(p.seller?.trustScore)}
+              </div>
+            </div>
+
+            <p style="white-space:pre-wrap">${esc(p.description) || '<span class="muted">No description provided.</span>'}</p>
+            ${p.location ? `<p class="muted">📍 ${esc(p.location)}</p>` : ''}
+
+            <div class="row wrap" style="margin-top:18px;gap:10px">
+              ${actions(p, me, isOwner, sold, reserved)}
+            </div>
+          </div>
+        </div>`;
+
+      // wire buttons
+      if (document.getElementById('watchBtn')) document.getElementById('watchBtn').onclick = toggleWatch;
+      if (document.getElementById('chatBtn')) document.getElementById('chatBtn').onclick = startChat;
+      if (document.getElementById('offerBtn')) document.getElementById('offerBtn').onclick = openOffer;
+      if (document.getElementById('buyBtn')) document.getElementById('buyBtn').onclick = buyNow;
+      if (document.getElementById('reportBtn')) document.getElementById('reportBtn').onclick = report;
+      if (document.getElementById('editBtn')) document.getElementById('editBtn').onclick = () => location.href = 'dashboard.html';
+    }
+
+    function actions(p, me, isOwner, sold, reserved) {
+      if (isOwner) {
+        return `<span class="muted">This is your listing.</span>
+                <button class="btn ghost" id="editBtn">Manage in dashboard</button>`;
+      }
+      if (!me) {
+        return `<a class="btn" href="login.html?next=${encodeURIComponent(location.pathname + location.search)}">Login to buy, chat or make an offer</a>`;
+      }
+      if (sold) return `<span class="muted">This item has been sold.</span>`;
+      if (reserved) return `<span class="muted">⏳ A sale is pending on this item.</span>`;
+      const verifyNote = me.verified ? '' : `<div class="muted" style="font-size:12px;flex-basis:100%">✉️ Verify your email (banner above) to buy or sell.</div>`;
+      return `
+        <button class="btn" id="buyBtn">🛒 Buy now · $${p.price}</button>
+        <button class="btn accent" id="offerBtn">🤝 Make an offer</button>
+        <button class="btn ghost" id="chatBtn">💬 Chat</button>
+        <button class="btn ghost" id="watchBtn">${p.isWatched ? '★ Watching' : '☆ Watch price'}</button>
+        <button class="btn ghost sm" id="reportBtn">⚐ Report</button>
+        ${verifyNote}`;
+    }
+
+    async function buyNow() {
+      try {
+        const { order } = await api('/orders', { method: 'POST', body: { productId: id } });
+        location.href = 'checkout.html?order=' + order.id;
+      } catch (e) { toast(e.message, true); }
+    }
+
+    async function toggleWatch() {
+      try {
+        const { watched } = await api(`/products/${id}/watch`, { method: 'POST' });
+        document.getElementById('watchBtn').textContent = watched ? '★ Watching' : '☆ Watch price';
+        toast(watched ? "You'll be alerted if the price drops 🔔" : 'Removed from watchlist');
+      } catch (e) { toast(e.message, true); }
+    }
+
+    async function startChat() {
+      try {
+        const { conversationId } = await api('/chat/start', { method: 'POST', body: { productId: id } });
+        location.href = 'chat.html?c=' + conversationId;
+      } catch (e) { toast(e.message, true); }
+    }
+
+    async function report() {
+      const reason = prompt('Why are you reporting this listing?');
+      if (!reason) return;
+      try { await api(`/products/${id}/report`, { method: 'POST', body: { reason } }); toast('Reported. Thanks — our team will review it.'); }
+      catch (e) { toast(e.message, true); }
+    }
+
+    // Offer modal
+    function openOffer() {
+      document.getElementById('offerSub').textContent = `Listed at $${PRODUCT.price}. The seller can accept, decline or counter.`;
+      document.getElementById('offerModal').classList.add('open');
+    }
+    function closeOffer() { document.getElementById('offerModal').classList.remove('open'); }
+    document.getElementById('sendOfferBtn').onclick = async () => {
+      const amount = Number(document.getElementById('offerAmount').value);
+      if (!(amount > 0)) return toast('Enter a valid amount', true);
+      try {
+        await api('/offers', { method: 'POST', body: { productId: id, amount } });
+        closeOffer();
+        toast('Offer sent! 🤝 Track it in Messages.');
+      } catch (e) { toast(e.message, true); }
+    };
+
+    load();
+  </script>
+</body>
+</html>

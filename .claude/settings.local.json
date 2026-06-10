@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm --version)",
+      "Bash(npm install *)",
+      "Bash(node -e ' *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3000/socket.io/socket.io.js)",
+      "Bash(node server.js)",
+      "Bash(curl -s -o /dev/null -w \"home:%{http_code} \" http://localhost:3000/)",
+      "Bash(curl -s -o /dev/null -w \"api:%{http_code}\\\\n\" http://localhost:3000/api/products)",
+      "Bash(node seed.js)",
+      "Bash(curl -s -o /dev/null -w \"home:%{http_code} checkout:%{http_code-} \" http://localhost:3000/)",
+      "Bash(curl -s -o /dev/null -w \"checkout:%{http_code} \" http://localhost:3000/checkout.html)",
+      "Bash(curl -s -o /dev/null -w \"verify:%{http_code}\\\\n\" http://localhost:3000/verify.html)",
+      "Bash(curl -s http://localhost:3000/api/products)",
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\).on\\('end',\\(\\)=>console.log\\('products available:',JSON.parse\\(d\\).products.length\\)\\)\")",
+      "Bash(node -e \"const fs=require\\('fs'\\);const p=JSON.parse\\(fs.readFileSync\\('data/products.json'\\)\\);console.log\\('total products:',p.length\\);console.log\\('with image:',p.filter\\(x=>x.image\\).length\\);console.log\\('sample image fields:',p.slice\\(0,3\\).map\\(x=>x.image\\)\\)\")",
+      "Bash(curl -s -o /dev/null -w \"existing upload jpg: %{http_code} \\(%{size_download} bytes\\)\\\\n\" http://localhost:3000/uploads/1781010928609-erqpob.jpg)",
+      "Bash(curl -s -o /dev/null -w \"api:%{http_code} \" http://localhost:3000/api/products)",
+      "Bash(curl -s \"http://localhost:3000/api/products\")",
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\).on\\('end',\\(\\)=>{const p=JSON.parse\\(d\\).products;console.log\\('| products:',p.length,'| all have images:',p.every\\(x=>x.image\\)\\)}\\)\")",
+      "Bash(curl -s -o /tmp/nettest.jpg -w \"loremflickr: %{http_code} size=%{size_download} type=%{content_type}\\\\n\" --max-time 20 \"https://loremflickr.com/400/300/headphones\")",
+      "Bash(curl -s -o /dev/null -w \"picsum: %{http_code}\\\\n\" --max-time 15 \"https://picsum.photos/200\")",
+      "Bash(curl -s -o /dev/null -w \"unsplash: %{http_code}\\\\n\" --max-time 15 \"https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=400\")",
+      "Bash(curl -sL -o /tmp/t1.jpg -w \"loremflickr -L: %{http_code} size=%{size_download} type=%{content_type}\\\\n\" --max-time 25 \"https://loremflickr.com/600/450/headphones\")",
+      "Bash(file /tmp/t1.jpg)",
+      "Bash(curl -sL -o /tmp/t2.jpg -w \"picsum -L: %{http_code} size=%{size_download} type=%{content_type}\\\\n\" --max-time 20 \"https://picsum.photos/600/450\")"
+    ]
+  }
+}

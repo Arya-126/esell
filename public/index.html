@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ReWear · Sustainable Resell Marketplace</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="js/app.js"></script>
+  <script>renderNav('index.html');</script>
+
+  <div class="container">
+    <div class="hero">
+      <div class="eco-banner">🌱 Every purchase here keeps usable goods out of landfill</div>
+      <h1>Give great things a second life.</h1>
+      <p>Buy and sell pre-loved items, chat directly with sellers, haggle with built-in offers, and track the CO₂ you save with every deal.</p>
+      <div class="row" style="margin-top:18px">
+        <a class="btn" href="sell.html">Start selling →</a>
+        <span class="muted" id="ecoTotal"></span>
+      </div>
+    </div>
+
+    <div class="filters">
+      <input class="search" id="q" placeholder="🔍 Search items..." />
+      <select id="category"></select>
+      <select id="condition"><option value="">Any condition</option></select>
+      <select id="sort">
+        <option value="new">Newest</option>
+        <option value="price-asc">Price: low → high</option>
+        <option value="price-desc">Price: high → low</option>
+        <option value="eco">Most eco-friendly</option>
+      </select>
+    </div>
+
+    <div id="grid" class="grid"></div>
+    <div id="empty" class="empty" style="display:none">No items match your search. Try clearing filters.</div>
+  </div>
+
+  <script>
+    const grid = document.getElementById('grid');
+    let debounce;
+
+    function fairTag(fair) {
+      if (!fair || fair.label === 'No data') return '';
+      const cls = fair.label === 'Great deal' ? 'deal' : fair.label === 'Above average' ? 'high' : '';
+      return `<span class="tag ${cls}">${fair.label === 'Great deal' ? '🔥 ' : ''}${fair.label}</span>`;
+    }
+
+    function card(p) {
+      const img = (p.thumb || p.image) ? `<img src="${p.thumb || p.image}" alt="${esc(p.title)}" loading="lazy" />` : '🖼️';
+      return `
+        <div class="product" onclick="location.href='product.html?id=${p.id}'">
+          <div class="thumb">${img}</div>
+          <div class="body">
+            <div class="title">${esc(p.title)}</div>
+            <div class="price">$${p.price}</div>
+            <div class="pill-row">
+              <span class="tag cond">${esc(p.condition)}</span>
+              <span class="tag eco">🌱 ${p.ecoSaved}kg CO₂</span>
+              ${fairTag(p.fair)}
+            </div>
+            <div class="muted" style="font-size:12px">${esc(p.category)}${p.location ? ' · ' + esc(p.location) : ''}</div>
+          </div>
+        </div>`;
+    }
+
+    async function load() {
+      const params = new URLSearchParams({
+        q: document.getElementById('q').value,
+        category: document.getElementById('category').value,
+        condition: document.getElementById('condition').value,
+        sort: document.getElementById('sort').value,
+      });
+      try {
+        const { products, categories, conditions } = await api('/products?' + params);
+        // populate filter dropdowns once
+        const catSel = document.getElementById('category');
+        if (catSel.options.length === 0) {
+          catSel.innerHTML = '<option value="All">All categories</option>' + categories.map((c) => `<option>${c}</option>`).join('');
+          document.getElementById('condition').innerHTML += conditions.map((c) => `<option>${c}</option>`).join('');
+        }
+        grid.innerHTML = products.map(card).join('');
+        document.getElementById('empty').style.display = products.length ? 'none' : 'block';
+
+        const totalEco = products.reduce((s, p) => s + p.ecoSaved, 0);
+        document.getElementById('ecoTotal').textContent = products.length
+          ? `${products.length} items · up to ${totalEco}kg CO₂ saveable right now`
+          : '';
+      } catch (e) { toast(e.message, true); }
+    }
+
+    ['q'].forEach((id) => document.getElementById(id).addEventListener('input', () => { clearTimeout(debounce); debounce = setTimeout(load, 250); }));
+    ['category', 'condition', 'sort'].forEach((id) => document.getElementById(id).addEventListener('change', load));
+    load();
+  </script>
+</body>
+</html>

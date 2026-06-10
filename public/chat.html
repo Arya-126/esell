@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Messages · ReWear</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="js/app.js"></script>
+  <script>renderNav('chat.html'); requireLogin();</script>
+
+  <div class="container">
+    <h1>Messages</h1>
+    <div class="chat-layout">
+      <div class="card inbox" id="inbox" style="padding:8px"></div>
+      <div class="card thread" id="thread"><div class="empty">Select a conversation to start chatting.</div></div>
+    </div>
+  </div>
+
+  <script>
+    const socket = getSocket();
+    let CURRENT = null;       // conversation id
+    let DATA = null;          // loaded conversation payload
+    let typingTimer;
+
+    async function loadInbox() {
+      const { conversations } = await api('/chat');
+      const inbox = document.getElementById('inbox');
+      if (!conversations.length) { inbox.innerHTML = '<div class="empty">No conversations yet.<br>Message a seller from any product page.</div>'; return; }
+      inbox.innerHTML = conversations.map((c) => `
+        <div class="convo-item ${c.id === CURRENT ? 'active' : ''}" onclick="openConvo('${c.id}')">
+          <div class="avatar" style="display:grid;place-items:center;font-weight:800;color:#08130c;background:var(--brand)">${esc(c.other.name[0].toUpperCase())}</div>
+          <div style="flex:1;min-width:0">
+            <div class="row between"><strong>${esc(c.other.name)}</strong>${c.unread ? `<span class="badge" style="position:static">${c.unread}</span>` : ''}</div>
+            <div class="muted" style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c.productTitle)} · ${c.lastMessage ? esc(c.lastMessage) : 'No messages yet'}</div>
+          </div>
+        </div>`).join('');
+    }
+
+    async function openConvo(cid) {
+      CURRENT = cid;
+      socket.emit('chat:join', cid);
+      DATA = await api('/chat/' + cid);
+      renderThread();
+      loadInbox();
+    }
+
+    function renderThread() {
+      const t = document.getElementById('thread');
+      const p = DATA.product;
+      const me = DATA.me;
+      const isSeller = p && p.sellerId === me;
+      const items = buildTimeline();
+
+      t.innerHTML = `
+        <div class="row between" style="border-bottom:1px solid var(--border);padding-bottom:10px">
+          <div class="row" style="gap:10px">
+            ${p && p.image ? `<img src="${p.image}" style="width:44px;height:44px;border-radius:9px;object-fit:cover" />` : ''}
+            <div>
+              <strong>${esc(DATA.conversation.other.name)}</strong>
+              <div class="muted" style="font-size:12px">
+                <a href="product.html?id=${p?.id}">${esc(p?.title || 'item')}</a> · $${p?.price ?? '—'} ${p?.status === 'sold' ? '· <span style="color:var(--warn)">SOLD</span>' : ''}
+              </div>
+            </div>
+          </div>
+          ${p && p.status === 'available' && !isSeller ? `<button class="btn accent sm" onclick="quickOffer()">🤝 Offer</button>` : ''}
+        </div>
+        <div class="messages" id="messages">${items}</div>
+        <div class="muted" id="typing" style="height:16px;font-size:12px"></div>
+        <form class="composer" id="composer">
+          <input id="msgInput" placeholder="Type a message…" autocomplete="off" />
+          <button class="btn" type="submit">Send</button>
+        </form>`;
+
+      const box = document.getElementById('messages');
+      box.scrollTop = box.scrollHeight;
+
+      document.getElementById('composer').onsubmit = sendMessage;
+      document.getElementById('msgInput').addEventListener('input', () => socket.emit('chat:typing', CURRENT));
+    }
+
+    // Merge messages + offers into one chronological timeline.
+    function buildTimeline() {
+      const me = DATA.me;
+      const events = [];
+      DATA.messages.forEach((m) => events.push({ t: m.createdAt, kind: 'msg', m }));
+      DATA.offers.forEach((o) => events.push({ t: o.createdAt, kind: 'offer', o }));
+      events.sort((a, b) => a.t.localeCompare(b.t));
+      return events.map((e) => e.kind === 'msg' ? msgBubble(e.m, me) : offerBubble(e.o, me)).join('') || '<div class="empty">Say hello 👋</div>';
+    }
+
+    function msgBubble(m, me) {
+      const mine = m.senderId === me;
+      return `<div class="bubble ${mine ? 'me' : 'them'}">${esc(m.text)}<span class="time">${timeAgo(m.createdAt)}</span></div>`;
+    }
+
+    function offerBubble(o, me) {
+      const iAmSeller = DATA.product && DATA.product.sellerId === me;
+      const mineToRespond = (o.from === 'buyer' && iAmSeller) || (o.from === 'seller' && !iAmSeller);
+      let status = '';
+      if (o.status === 'accepted') status = '<div style="color:var(--brand);font-weight:700">✅ Accepted — deal done!</div>';
+      else if (o.status === 'rejected') status = '<div class="muted">❌ Declined</div>';
+      else if (o.status === 'superseded' || o.status === 'countered') status = '<div class="muted">↻ Updated below</div>';
+      else if (o.status === 'pending' && mineToRespond) {
+        status = `<div class="row" style="justify-content:center;gap:8px;margin-top:8px">
+            <button class="btn sm" onclick="respondOffer('${o.id}','accept')">Accept</button>
+            <button class="btn warn sm" onclick="counterOffer('${o.id}')">Counter</button>
+            <button class="btn danger sm" onclick="respondOffer('${o.id}','reject')">Decline</button>
+          </div>`;
+      } else if (o.status === 'pending') status = '<div class="muted">⏳ Waiting for a response…</div>';
+
+      return `<div class="offer-card">
+          <div class="muted" style="font-size:12px">${o.from === 'buyer' ? 'Buyer offered' : 'Seller countered'}</div>
+          <div class="amt">$${o.amount}</div>
+          ${status}
+        </div>`;
+    }
+
+    function sendMessage(e) {
+      e.preventDefault();
+      const input = document.getElementById('msgInput');
+      const text = input.value.trim();
+      if (!text) return;
+      socket.emit('chat:send', { conversationId: CURRENT, text }, (res) => {
+        if (res && res.error) toast(res.error, true);
+      });
+      input.value = '';
+    }
+
+    async function respondOffer(offerId, action) {
+      try {
+        await api(`/offers/${offerId}/respond`, { method: 'POST', body: { action } });
+        toast(action === 'accept' ? 'Offer accepted! 🎉' : 'Offer declined');
+        await openConvo(CURRENT);
+      } catch (e) { toast(e.message, true); }
+    }
+    async function counterOffer(offerId) {
+      const counter = Number(prompt('Counter with what amount? (USD)'));
+      if (!(counter > 0)) return;
+      try { await api(`/offers/${offerId}/respond`, { method: 'POST', body: { action: 'counter', counter } }); await openConvo(CURRENT); }
+      catch (e) { toast(e.message, true); }
+    }
+    async function quickOffer() {
+      const amount = Number(prompt('Your offer (USD):'));
+      if (!(amount > 0)) return;
+      try { await api('/offers', { method: 'POST', body: { productId: DATA.product.id, amount } }); toast('Offer sent 🤝'); await openConvo(CURRENT); }
+      catch (e) { toast(e.message, true); }
+    }
+    const quickOfferBtn = quickOffer; // referenced in markup
+
+    /* ---- realtime ---- */
+    socket.on('chat:message', (m) => {
+      if (m.conversationId === CURRENT) {
+        DATA.messages.push(m);
+        renderThread();
+      }
+      loadInbox();
+    });
+    socket.on('chat:typing', ({ name }) => {
+      const el = document.getElementById('typing');
+      if (!el) return;
+      el.textContent = `${name} is typing…`;
+      clearTimeout(typingTimer);
+      typingTimer = setTimeout(() => (el.textContent = ''), 1500);
+    });
+    socket.on('offer:new', () => { if (CURRENT) openConvo(CURRENT); });
+    socket.on('offer:update', () => { if (CURRENT) openConvo(CURRENT); });
+
+    // Boot: open conversation from ?c= if present.
+    (async () => {
+      await loadInbox();
+      const cid = new URLSearchParams(location.search).get('c');
+      if (cid) openConvo(cid);
+    })();
+  </script>
+</body>
+</html>

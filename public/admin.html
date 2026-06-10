@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin · ReWear</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="js/app.js"></script>
+  <script>
+    renderNav('admin.html');
+    if (!Auth.isLoggedIn || Auth.user?.role !== 'admin') { location.href = 'index.html'; }
+  </script>
+
+  <div class="container">
+    <h1>🛡️ Admin console</h1>
+    <p class="muted">Monitor activity, moderate listings and keep the community safe.</p>
+
+    <div class="stat-grid" id="stats" style="margin:18px 0"></div>
+
+    <div class="card" style="margin-bottom:18px">
+      <h2>📊 Listings by category</h2>
+      <div id="chart"></div>
+    </div>
+
+    <div class="tabs">
+      <button class="active" data-tab="reports" onclick="atab('reports')">⚐ Reports</button>
+      <button data-tab="disputes" onclick="atab('disputes')">↩ Disputes</button>
+      <button data-tab="users" onclick="atab('users')">Users</button>
+      <button data-tab="products" onclick="atab('products')">Listings</button>
+    </div>
+    <div id="apane"></div>
+  </div>
+
+  <script>
+    async function loadStats() {
+      const s = await api('/admin/stats');
+      document.getElementById('stats').innerHTML = `
+        ${stat(s.users, 'Total users')}
+        ${stat(s.products, 'Active listings')}
+        ${stat(s.sold, 'Items sold')}
+        ${stat('$' + s.gmv, 'Gross sales (GMV)', true)}
+        ${stat(s.orders, 'Paid orders')}
+        ${stat(s.pendingShipments, 'Awaiting shipment')}
+        ${stat(s.messages, 'Messages sent')}
+        ${stat(s.offers, 'Offers made')}
+        ${stat(s.totalEco + 'kg', 'CO₂ saved 🌱', true)}
+        ${stat(s.openReports, 'Open reports')}
+        ${stat(s.openDisputes, 'Open disputes')}
+        ${stat(s.refunded, 'Refunds issued')}`;
+      // simple bar chart
+      const entries = Object.entries(s.byCategory).sort((a, b) => b[1] - a[1]);
+      const max = Math.max(1, ...entries.map((e) => e[1]));
+      document.getElementById('chart').innerHTML = entries.map(([cat, n]) => `
+        <div style="margin:8px 0">
+          <div class="row between" style="font-size:13px"><span>${esc(cat)}</span><span class="muted">${n}</span></div>
+          <div style="height:10px;background:var(--surface-2);border-radius:6px;overflow:hidden">
+            <div style="height:100%;width:${(n / max) * 100}%;background:var(--brand)"></div>
+          </div>
+        </div>`).join('') || '<p class="muted">No listings yet.</p>';
+    }
+    function stat(num, lbl, green) { return `<div class="stat ${green ? 'green' : ''}"><div class="num">${num}</div><div class="lbl">${lbl}</div></div>`; }
+
+    function atab(name) {
+      document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
+      if (name === 'reports') loadReports();
+      else if (name === 'disputes') loadDisputes();
+      else if (name === 'users') loadUsers();
+      else loadProducts();
+    }
+
+    async function loadDisputes() {
+      const { disputes } = await api('/admin/disputes');
+      const pane = document.getElementById('apane');
+      if (!disputes.length) { pane.innerHTML = '<div class="empty">🎉 No open disputes.</div>'; return; }
+      pane.innerHTML = disputes.map((d) => `
+        <div class="card" style="margin-bottom:10px">
+          <div class="row between wrap" style="gap:12px">
+            <div>
+              <strong>${esc(d.product?.title || '(item)')}</strong> · $${d.amount}
+              <div class="muted" style="font-size:13px">Buyer ${esc(d.buyerName)} vs seller ${esc(d.sellerName)} · order #${d.id.slice(-6)} · ${timeAgo(d.refundRequestedAt || d.createdAt)}</div>
+              <div style="margin-top:6px">Reason: ${esc(d.refundReason || '—')}</div>
+            </div>
+            <div class="row" style="gap:8px">
+              <button class="btn warn sm" onclick="adminRefund('${d.id}','approve')">Approve refund</button>
+              <button class="btn ghost sm" onclick="adminRefund('${d.id}','reject')">Decline</button>
+            </div>
+          </div>
+        </div>`).join('');
+    }
+    async function adminRefund(id, action) {
+      if (action === 'approve' && !confirm('Approve and refund the buyer?')) return;
+      try { await api(`/orders/${id}/refund-${action}`, { method: 'POST' }); toast(action === 'approve' ? 'Refund approved' : 'Refund declined'); loadDisputes(); loadStats(); }
+      catch (e) { toast(e.message, true); }
+    }
+
+    async function loadReports() {
+      const { reports } = await api('/admin/reports');
+      const pane = document.getElementById('apane');
+      if (!reports.length) { pane.innerHTML = '<div class="empty">🎉 No open reports.</div>'; return; }
+      pane.innerHTML = reports.map((r) => `
+        <div class="card" style="margin-bottom:10px">
+          <div class="row between wrap">
+            <div>
+              <strong>${esc(r.product?.title || '(deleted listing)')}</strong>
+              <div class="muted" style="font-size:13px">Reported by ${esc(r.reporter)} · ${timeAgo(r.createdAt)}</div>
+              <div style="margin-top:6px">Reason: ${esc(r.reason)}</div>
+            </div>
+            <div class="row" style="gap:8px">
+              ${r.product ? `<button class="btn ghost sm" onclick="location.href='product.html?id=${r.productId}'">View</button>
+              <button class="btn danger sm" onclick="takedown('${r.productId}','${r.id}')">Take down</button>` : ''}
+              <button class="btn sm" onclick="resolve('${r.id}')">Dismiss</button>
+            </div>
+          </div>
+        </div>`).join('');
+    }
+
+    async function loadUsers() {
+      const { users } = await api('/admin/users');
+      document.getElementById('apane').innerHTML = `<div class="card" style="overflow-x:auto"><table>
+        <tr><th>Name</th><th>Email</th><th>Role</th><th>Trust</th><th>Listings</th><th>Sales</th><th>Status</th><th></th></tr>
+        ${users.map((u) => `<tr>
+          <td><a href="seller.html?id=${u.id}">${esc(u.name)}</a></td>
+          <td class="muted">${esc(u.email)}</td>
+          <td>${u.role === 'admin' ? '🛡️ admin' : 'user'}</td>
+          <td>${u.trustScore ?? '—'}</td>
+          <td>${u.listings}</td><td>${u.sales}</td>
+          <td>${u.banned ? '<span style="color:var(--danger)">banned</span>' : 'active'}</td>
+          <td>${u.role !== 'admin' ? `<button class="btn sm ${u.banned ? 'ghost' : 'danger'}" onclick="ban('${u.id}', ${!u.banned})">${u.banned ? 'Unban' : 'Ban'}</button>` : ''}</td>
+        </tr>`).join('')}
+      </table></div>`;
+    }
+
+    async function loadProducts() {
+      const { products } = await api('/admin/products');
+      document.getElementById('apane').innerHTML = `<div class="card" style="overflow-x:auto"><table>
+        <tr><th>Item</th><th>Seller</th><th>Price</th><th>Category</th><th>Status</th><th>Flags</th><th></th></tr>
+        ${products.map((p) => `<tr>
+          <td>${esc(p.title)}</td>
+          <td class="muted">${esc(p.sellerName)}</td>
+          <td>$${p.price}</td>
+          <td>${esc(p.category)}</td>
+          <td>${p.status === 'removed' ? '<span style="color:var(--danger)">removed</span>' : p.status}</td>
+          <td>${p.reports ? `<span style="color:var(--warn)">⚐ ${p.reports}</span>` : '—'}</td>
+          <td>${p.status !== 'removed' ? `<button class="btn danger sm" onclick="adminRemove('${p.id}')">Remove</button>` : ''}</td>
+        </tr>`).join('')}
+      </table></div>`;
+    }
+
+    async function ban(uid, banned) { await api(`/admin/users/${uid}/ban`, { method: 'POST', body: { banned } }); toast(banned ? 'User banned' : 'User unbanned'); loadUsers(); loadStats(); }
+    async function adminRemove(pid) { if (!confirm('Remove this listing?')) return; await api('/admin/products/' + pid, { method: 'DELETE' }); toast('Listing removed'); loadProducts(); loadStats(); }
+    async function takedown(pid, rid) { await api('/admin/products/' + pid, { method: 'DELETE' }); await api(`/admin/reports/${rid}/resolve`, { method: 'POST' }); toast('Taken down'); loadReports(); loadStats(); }
+    async function resolve(rid) { await api(`/admin/reports/${rid}/resolve`, { method: 'POST' }); toast('Report dismissed'); loadReports(); loadStats(); }
+
+    loadStats();
+    atab('reports');
+  </script>
+</body>
+</html>

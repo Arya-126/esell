@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard · ReWear</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="js/app.js"></script>
+  <script>renderNav('dashboard.html'); requireLogin();</script>
+
+  <div class="container">
+    <div class="row between wrap">
+      <div>
+        <h1 id="hello">Your dashboard</h1>
+        <p class="muted" id="trustLine"></p>
+      </div>
+      <button class="btn ghost" onclick="Auth.clear(); location.href='index.html'">Log out</button>
+    </div>
+
+    <div class="stat-grid" style="margin:16px 0 24px">
+      <div class="stat green"><div class="num" id="ecoStat">0kg</div><div class="lbl">🌱 CO₂ you've saved as a buyer</div></div>
+      <div class="stat"><div class="num" id="activeStat">0</div><div class="lbl">Active listings</div></div>
+      <div class="stat"><div class="num" id="soldStat">0</div><div class="lbl">Items sold</div></div>
+      <div class="stat"><div class="num" id="watchStat">0</div><div class="lbl">Watching</div></div>
+    </div>
+
+    <div class="tabs">
+      <button class="active" data-tab="listings" onclick="tab('listings')">My listings</button>
+      <button data-tab="orders" onclick="tab('orders')">🧾 Orders</button>
+      <button data-tab="watchlist" onclick="tab('watchlist')">Watchlist</button>
+      <button data-tab="profile" onclick="tab('profile')">Profile</button>
+    </div>
+
+    <div id="pane"></div>
+  </div>
+
+  <script>
+    let LISTINGS = [], WATCH = [], ME = null;
+
+    async function boot() {
+      const { user } = await api('/auth/me');
+      ME = user;
+      Auth.set(Auth.token, user);
+      document.getElementById('hello').textContent = `Hi, ${user.name} 👋`;
+      document.getElementById('trustLine').innerHTML = trustBadge(user.trustScore) + ` · member since ${new Date(user.createdAt).toLocaleDateString()}`;
+      document.getElementById('ecoStat').textContent = (user.ecoImpact || 0) + 'kg';
+
+      const [{ products: mine }, { products: watch }] = await Promise.all([
+        api('/products/mine/listings'),
+        api('/products/mine/watchlist'),
+      ]);
+      LISTINGS = mine; WATCH = watch;
+      document.getElementById('activeStat').textContent = mine.filter((p) => p.status === 'available').length;
+      document.getElementById('soldStat').textContent = mine.filter((p) => p.status === 'sold').length;
+      document.getElementById('watchStat').textContent = watch.length;
+      tab('listings');
+    }
+
+    function tab(name) {
+      document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
+      const pane = document.getElementById('pane');
+      if (name === 'listings') pane.innerHTML = listingsView();
+      else if (name === 'watchlist') pane.innerHTML = watchView();
+      else if (name === 'orders') ordersView();
+      else pane.innerHTML = profileView();
+    }
+
+    function listingsView() {
+      if (!LISTINGS.length) return `<div class="empty">No listings yet. <a href="sell.html">Sell something →</a></div>`;
+      return `<div class="grid">${LISTINGS.map((p) => `
+        <div class="product">
+          <div class="thumb" onclick="location.href='product.html?id=${p.id}'">${(p.thumb || p.image) ? `<img src="${p.thumb || p.image}" loading="lazy">` : '🖼️'}</div>
+          <div class="body">
+            <div class="title">${esc(p.title)}</div>
+            <div class="price">$${p.price} ${p.status === 'sold' ? '<span class="tag high">SOLD</span>' : ''}</div>
+            <div class="muted" style="font-size:12px">👁️ ${p.views || 0} · ⭐ ${p.watchCount} watching</div>
+            ${p.status === 'available' ? `
+              <div class="row" style="gap:6px;margin-top:6px">
+                <button class="btn sm warn" onclick="markSold('${p.id}')">Mark sold</button>
+                <button class="btn sm ghost" onclick="editPrice('${p.id}', ${p.price})">Edit price</button>
+                <button class="btn sm danger" onclick="removeListing('${p.id}')">Delete</button>
+              </div>` : `<div class="muted" style="font-size:12px">Sold ${p.soldPrice ? 'for $' + p.soldPrice : ''}</div>`}
+          </div>
+        </div>`).join('')}</div>`;
+    }
+
+    function watchView() {
+      if (!WATCH.length) return `<div class="empty">You're not watching anything. Tap “☆ Watch price” on any item to get price-drop alerts. 🔔</div>`;
+      return `<div class="grid">${WATCH.map((p) => `
+        <div class="product" onclick="location.href='product.html?id=${p.id}'">
+          <div class="thumb">${(p.thumb || p.image) ? `<img src="${p.thumb || p.image}" loading="lazy">` : '🖼️'}</div>
+          <div class="body"><div class="title">${esc(p.title)}</div><div class="price">$${p.price}</div>
+          <span class="tag ${p.status === 'sold' ? 'high' : 'eco'}">${p.status === 'sold' ? 'Sold' : '🌱 ' + p.ecoSaved + 'kg CO₂'}</span></div>
+        </div>`).join('')}</div>`;
+    }
+
+    const STEPS = ['pending_payment', 'paid', 'shipped', 'delivered'];
+    const STEP_LABEL = { pending_payment: 'Awaiting payment', paid: 'Paid', shipped: 'Shipped', delivered: 'Delivered' };
+
+    function timeline(status) {
+      if (status === 'cancelled') return '<span class="tag high">Cancelled</span>';
+      const idx = STEPS.indexOf(status);
+      return `<div class="row" style="gap:4px;flex-wrap:wrap">` + STEPS.map((s, i) => {
+        const done = i <= idx;
+        return `<span class="tag" style="background:${done ? 'rgba(46,204,113,.16)' : 'var(--surface-2)'};color:${done ? 'var(--brand)' : 'var(--muted)'}">${done && i < idx ? '✓ ' : ''}${STEP_LABEL[s]}</span>${i < STEPS.length - 1 ? '<span class="muted">→</span>' : ''}`;
+      }).join('') + `</div>`;
+    }
+
+    async function ordersView() {
+      const pane = document.getElementById('pane');
+      pane.innerHTML = '<div class="empty">Loading orders…</div>';
+      const { purchases, sales } = await api('/orders/mine');
+      pane.innerHTML = `
+        <h2>🛒 Buying (${purchases.length})</h2>
+        ${purchases.length ? purchases.map((o) => orderCard(o, 'buyer')).join('') : '<p class="muted">No purchases yet.</p>'}
+        <h2 style="margin-top:26px">📦 Selling (${sales.filter(s=>s.status!=='cancelled').length})</h2>
+        ${sales.length ? sales.map((o) => orderCard(o, 'seller')).join('') : '<p class="muted">No sales yet.</p>'}`;
+    }
+
+    function refundBadge(o) {
+      if (o.status === 'refunded') return '<span class="tag high">↩ Refunded</span>';
+      if (o.refundStatus === 'requested') return '<span class="tag" style="background:rgba(240,160,32,.16);color:var(--warn)">⏳ Refund requested</span>';
+      if (o.refundStatus === 'rejected') return '<span class="tag" style="background:rgba(229,72,77,.16);color:var(--danger)">Refund declined</span>';
+      return '';
+    }
+
+    function orderCard(o, side) {
+      const p = o.product || {};
+      const paidPlus = ['paid', 'shipped', 'delivered', 'refunded'].includes(o.status);
+      const refundable = ['paid', 'shipped', 'delivered'].includes(o.status) && ['none', 'rejected', undefined].includes(o.refundStatus);
+      const acts = [];
+      if (side === 'buyer') {
+        if (o.status === 'pending_payment') {
+          acts.push(`<button class="btn sm" onclick="location.href='checkout.html?order=${o.id}'">Complete payment</button>`);
+          acts.push(`<button class="btn ghost sm" onclick="cancelOrder('${o.id}')">Cancel</button>`);
+        } else if (o.status === 'shipped') {
+          acts.push(`<button class="btn sm" onclick="orderAction('${o.id}','deliver')">Confirm delivery</button>`);
+        } else if (o.status === 'delivered') {
+          acts.push(o.reviewed ? '<span class="tag eco">✓ Reviewed</span>' : `<button class="btn sm" onclick="leaveReview('${p.id}')">Leave a review ⭐</button>`);
+        }
+        if (paidPlus) acts.push(`<button class="btn ghost sm" onclick="downloadAuthed('/orders/${o.id}/receipt','receipt-${o.id}.pdf')">⬇ Receipt</button>`);
+        if (refundable) acts.push(`<button class="btn ghost sm" onclick="requestRefund('${o.id}')">Request refund</button>`);
+      } else {
+        if (o.status === 'paid') acts.push(`<button class="btn sm" onclick="shipOrder('${o.id}')">Mark shipped 📦</button>`);
+        else if (o.status === 'pending_payment') acts.push('<span class="muted" style="font-size:12px">Awaiting buyer payment</span>');
+        else if (o.status === 'shipped') acts.push(`<span class="muted" style="font-size:12px">Shipped${o.tracking ? ' · #' + esc(o.tracking) : ''}</span>`);
+        if (o.refundStatus === 'requested') {
+          acts.push(`<button class="btn warn sm" onclick="resolveRefund('${o.id}','approve')">Approve refund</button>`);
+          acts.push(`<button class="btn ghost sm" onclick="resolveRefund('${o.id}','reject')">Decline</button>`);
+        }
+        if (paidPlus) acts.push(`<button class="btn ghost sm" onclick="downloadAuthed('/orders/${o.id}/receipt','receipt-${o.id}.pdf')">⬇ Receipt</button>`);
+      }
+      return `<div class="card" style="margin-bottom:12px">
+        <div class="row between wrap" style="gap:12px">
+          <div class="row" style="gap:12px">
+            ${(p.thumb || p.image) ? `<img src="${p.thumb || p.image}" style="width:54px;height:54px;border-radius:9px;object-fit:cover">` : ''}
+            <div>
+              <strong>${esc(p.title || 'Item')}</strong> ${refundBadge(o)}
+              <div class="muted" style="font-size:13px">$${o.amount} · ${side === 'buyer' ? 'from ' + esc(o.sellerName) : 'to ' + esc(o.buyerName)} · #${o.id.slice(-6)}</div>
+              <div style="margin-top:6px">${timeline(o.status)}</div>
+              ${o.refundReason && o.refundStatus === 'requested' ? `<div class="muted" style="font-size:12px;margin-top:4px">Reason: ${esc(o.refundReason)}</div>` : ''}
+            </div>
+          </div>
+          <div class="row wrap" style="gap:6px">${acts.join('')}</div>
+        </div>
+      </div>`;
+    }
+
+    async function requestRefund(id) {
+      const reason = prompt('Tell us what went wrong (this opens a dispute):');
+      if (reason === null) return;
+      try { await api(`/orders/${id}/refund-request`, { method: 'POST', body: { reason } }); toast('Refund requested — the seller and our team were notified.'); ordersView(); }
+      catch (e) { toast(e.message, true); }
+    }
+    async function resolveRefund(id, action) {
+      if (action === 'approve' && !confirm('Approve this refund? The buyer will be refunded.')) return;
+      try { await api(`/orders/${id}/refund-${action}`, { method: 'POST' }); toast(action === 'approve' ? 'Refund approved' : 'Refund declined'); ordersView(); }
+      catch (e) { toast(e.message, true); }
+    }
+
+    async function orderAction(id, action) {
+      try { await api(`/orders/${id}/${action}`, { method: 'POST' }); toast('Done'); ordersView(); }
+      catch (e) { toast(e.message, true); }
+    }
+    async function cancelOrder(id) { if (!confirm('Cancel this order?')) return; orderAction(id, 'cancel'); }
+    async function shipOrder(id) {
+      const tracking = prompt('Tracking number (optional):') || '';
+      try { await api(`/orders/${id}/ship`, { method: 'POST', body: { tracking } }); toast('Marked shipped 📦'); ordersView(); }
+      catch (e) { toast(e.message, true); }
+    }
+
+    async function leaveReview(pid) {
+      const rating = Number(prompt('Rate the seller 1–5 stars:'));
+      if (!(rating >= 1 && rating <= 5)) return toast('Enter 1–5', true);
+      const comment = prompt('Add a short comment (optional):') || '';
+      try { await api(`/products/${pid}/review`, { method: 'POST', body: { rating, comment } }); toast('Thanks for your review! ⭐'); ordersView(); }
+      catch (e) { toast(e.message, true); }
+    }
+
+    function profileView() {
+      setTimeout(renderAddresses, 0);
+      return `<div class="card" style="max-width:520px">
+        <label>Name</label><input id="pName" value="${esc(ME.name)}" />
+        <label>Bio</label><textarea id="pBio" placeholder="Tell buyers a bit about you...">${esc(ME.bio || '')}</textarea>
+        <button class="btn" style="margin-top:14px" onclick="saveProfile()">Save profile</button>
+        <p class="muted" style="font-size:12px;margin-top:14px">Your public seller page: <a href="seller.html?id=${ME.id}">view it →</a></p>
+      </div>
+      <div class="card" style="max-width:520px;margin-top:16px">
+        <h2>📦 Saved addresses</h2>
+        <div id="addrList" class="muted">Loading…</div>
+        <details style="margin-top:12px"><summary style="cursor:pointer;color:var(--accent)">+ Add an address</summary>
+          <div class="row" style="gap:10px"><div style="flex:1"><label>Name</label><input id="a_name" value="${esc(ME.name)}"></div><div style="flex:1"><label>ZIP</label><input id="a_zip"></div></div>
+          <label>Address</label><input id="a_line1" placeholder="123 Main St">
+          <div class="row" style="gap:10px"><div style="flex:1"><label>City</label><input id="a_city"></div><div style="flex:1"><label>Country</label><input id="a_country"></div></div>
+          <button class="btn sm" style="margin-top:12px" onclick="addAddress()">Save address</button>
+        </details>
+      </div>`;
+    }
+
+    async function renderAddresses() {
+      const el = document.getElementById('addrList'); if (!el) return;
+      const { addresses } = await api('/auth/addresses');
+      ADDR = addresses;
+      el.innerHTML = addresses.length ? addresses.map((a) => `
+        <div class="row between" style="padding:8px 0;border-bottom:1px solid var(--border)">
+          <div style="font-size:13px;color:var(--text)">${esc(a.name)} — ${esc(a.line1)}, ${esc(a.city)} ${esc(a.zip)} ${a.isDefault ? '<span class="tag eco">default</span>' : ''}</div>
+          <div class="row" style="gap:6px">
+            ${a.isDefault ? '' : `<button class="btn ghost sm" onclick="makeDefaultAddr('${a.id}')">Set default</button>`}
+            <button class="btn danger sm" onclick="deleteAddr('${a.id}')">✕</button>
+          </div>
+        </div>`).join('') : '<span class="muted">No saved addresses yet.</span>';
+    }
+    let ADDR = [];
+    async function addAddress() {
+      const body = { name: v('a_name'), line1: v('a_line1'), city: v('a_city'), zip: v('a_zip'), country: v('a_country') };
+      try { await api('/auth/addresses', { method: 'POST', body }); toast('Address saved'); renderAddresses();
+        ['a_line1','a_city','a_zip','a_country'].forEach((id) => { const e = document.getElementById(id); if (e) e.value = ''; }); }
+      catch (e) { toast(e.message, true); }
+    }
+    const v = (id) => (document.getElementById(id)?.value || '').trim();
+    async function deleteAddr(id) { await api('/auth/addresses/' + id, { method: 'DELETE' }); renderAddresses(); }
+    async function makeDefaultAddr(id) { await api(`/auth/addresses/${id}/default`, { method: 'POST' }); renderAddresses(); }
+
+    async function markSold(pid) {
+      if (!confirm('Mark this item as sold?')) return;
+      await api('/products/' + pid, { method: 'PUT', body: { status: 'sold' } });
+      toast('Marked as sold'); boot();
+    }
+    async function editPrice(pid, current) {
+      const v = Number(prompt('New price (USD):', current));
+      if (!(v >= 0)) return;
+      await api('/products/' + pid, { method: 'PUT', body: { price: v } });
+      toast(v < current ? 'Price dropped — watchers notified 🔔' : 'Price updated'); boot();
+    }
+    async function removeListing(pid) {
+      if (!confirm('Delete this listing?')) return;
+      await api('/products/' + pid, { method: 'DELETE' });
+      toast('Listing removed'); boot();
+    }
+    async function saveProfile() {
+      const name = document.getElementById('pName').value.trim();
+      const bio = document.getElementById('pBio').value;
+      const { user } = await api('/auth/me', { method: 'PUT', body: { name, bio } });
+      ME = user; Auth.set(Auth.token, user);
+      toast('Profile saved');
+    }
+
+    boot();
+  </script>
+</body>
+</html>

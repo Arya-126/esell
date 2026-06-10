@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Verify email · ReWear</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="js/app.js"></script>
+  <div class="container" style="max-width:480px;text-align:center">
+    <div style="margin:40px 0"><a class="brand" href="index.html" style="font-size:30px">Re<span>Wear</span></a></div>
+    <div class="card" id="box"><div class="empty">Verifying your email…</div></div>
+  </div>
+
+  <script>
+    (async () => {
+      const token = new URLSearchParams(location.search).get('token');
+      const box = document.getElementById('box');
+      if (!token) { box.innerHTML = '<h2>Invalid link</h2><p class="muted">No verification token found.</p>'; return; }
+      try {
+        await api('/auth/verify', { method: 'POST', body: { token } });
+        // Refresh the stored user if logged in.
+        if (Auth.isLoggedIn) {
+          try { const { user } = await api('/auth/me'); Auth.set(Auth.token, user); } catch {}
+        }
+        box.innerHTML = `
+          <div style="font-size:50px">✅</div>
+          <h2>Email verified!</h2>
+          <p class="muted">Your account is now fully active. You can buy, sell and check out.</p>
+          <a class="btn" href="${Auth.isLoggedIn ? 'dashboard.html' : 'login.html'}" style="margin-top:10px">Continue →</a>`;
+      } catch (e) {
+        box.innerHTML = `<div style="font-size:50px">⚠️</div><h2>Verification failed</h2><p class="muted">${esc(e.message)}</p>
+          <a class="btn ghost" href="index.html">Back to marketplace</a>`;
+      }
+    })();
+  </script>
+</body>
+</html>
