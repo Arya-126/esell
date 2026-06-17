@@ -41,6 +41,7 @@
     let LISTINGS = [], WATCH = [], ME = null;
 
     async function boot() {
+      await Currency.ready;
       const { user } = await api('/auth/me');
       ME = user;
       Auth.set(Auth.token, user);
@@ -75,14 +76,14 @@
           <div class="thumb" onclick="location.href='product.html?id=${p.id}'">${(p.thumb || p.image) ? `<img src="${p.thumb || p.image}" loading="lazy">` : '🖼️'}</div>
           <div class="body">
             <div class="title">${esc(p.title)}</div>
-            <div class="price">$${p.price} ${p.status === 'sold' ? '<span class="tag high">SOLD</span>' : ''}</div>
+            <div class="price">${money(p.price)} ${p.status === 'sold' ? '<span class="tag high">SOLD</span>' : ''}</div>
             <div class="muted" style="font-size:12px">👁️ ${p.views || 0} · ⭐ ${p.watchCount} watching</div>
             ${p.status === 'available' ? `
               <div class="row" style="gap:6px;margin-top:6px">
                 <button class="btn sm warn" onclick="markSold('${p.id}')">Mark sold</button>
                 <button class="btn sm ghost" onclick="editPrice('${p.id}', ${p.price})">Edit price</button>
                 <button class="btn sm danger" onclick="removeListing('${p.id}')">Delete</button>
-              </div>` : `<div class="muted" style="font-size:12px">Sold ${p.soldPrice ? 'for $' + p.soldPrice : ''}</div>`}
+              </div>` : `<div class="muted" style="font-size:12px">Sold ${p.soldPrice ? 'for ' + money(p.soldPrice) : ''}</div>`}
           </div>
         </div>`).join('')}</div>`;
     }
@@ -92,7 +93,7 @@
       return `<div class="grid">${WATCH.map((p) => `
         <div class="product" onclick="location.href='product.html?id=${p.id}'">
           <div class="thumb">${(p.thumb || p.image) ? `<img src="${p.thumb || p.image}" loading="lazy">` : '🖼️'}</div>
-          <div class="body"><div class="title">${esc(p.title)}</div><div class="price">$${p.price}</div>
+          <div class="body"><div class="title">${esc(p.title)}</div><div class="price">${money(p.price)}</div>
           <span class="tag ${p.status === 'sold' ? 'high' : 'eco'}">${p.status === 'sold' ? 'Sold' : '🌱 ' + p.ecoSaved + 'kg CO₂'}</span></div>
         </div>`).join('')}</div>`;
     }
@@ -114,6 +115,7 @@
       pane.innerHTML = '<div class="empty">Loading orders…</div>';
       const { purchases, sales } = await api('/orders/mine');
       pane.innerHTML = `
+        <div class="row between wrap"><span></span><a class="btn ghost sm" href="transactions.html">🧾 Full transaction history →</a></div>
         <h2>🛒 Buying (${purchases.length})</h2>
         ${purchases.length ? purchases.map((o) => orderCard(o, 'buyer')).join('') : '<p class="muted">No purchases yet.</p>'}
         <h2 style="margin-top:26px">📦 Selling (${sales.filter(s=>s.status!=='cancelled').length})</h2>
@@ -134,7 +136,7 @@
       const acts = [];
       if (side === 'buyer') {
         if (o.status === 'pending_payment') {
-          acts.push(`<button class="btn sm" onclick="location.href='checkout.html?order=${o.id}'">Complete payment</button>`);
+          acts.push(`<button class="btn sm" onclick="location.href='checkout.html?${o.groupId ? 'group=' + o.groupId : 'order=' + o.id}'">Complete payment</button>`);
           acts.push(`<button class="btn ghost sm" onclick="cancelOrder('${o.id}')">Cancel</button>`);
         } else if (o.status === 'shipped') {
           acts.push(`<button class="btn sm" onclick="orderAction('${o.id}','deliver')">Confirm delivery</button>`);
@@ -159,7 +161,7 @@
             ${(p.thumb || p.image) ? `<img src="${p.thumb || p.image}" style="width:54px;height:54px;border-radius:9px;object-fit:cover">` : ''}
             <div>
               <strong>${esc(p.title || 'Item')}</strong> ${refundBadge(o)}
-              <div class="muted" style="font-size:13px">$${o.amount} · ${side === 'buyer' ? 'from ' + esc(o.sellerName) : 'to ' + esc(o.buyerName)} · #${o.id.slice(-6)}</div>
+              <div class="muted" style="font-size:13px">${orderMoney(o)} · ${side === 'buyer' ? 'from ' + esc(o.sellerName) : 'to ' + esc(o.buyerName)} · #${o.id.slice(-6)}${o.groupId ? ' · 🛒 cart' : ''}</div>
               <div style="margin-top:6px">${timeline(o.status)}</div>
               ${o.refundReason && o.refundStatus === 'requested' ? `<div class="muted" style="font-size:12px;margin-top:4px">Reason: ${esc(o.refundReason)}</div>` : ''}
             </div>

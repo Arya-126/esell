@@ -5,6 +5,7 @@ const { notify } = require('../lib/helpers');
 const { sendOrderEmail } = require('../lib/mailer');
 const payments = require('../lib/payments');
 const { streamReceipt } = require('../lib/receipt');
+const fx = require('../lib/currency');
 
 const router = express.Router();
 
@@ -13,18 +14,49 @@ function validShipping(s) {
   return ['name', 'line1', 'city', 'zip'].every((k) => String(s[k] || '').trim());
 }
 
+// Currency fields locked onto an order at creation/checkout time.
+function lockedCurrency(req, amountUsd) {
+  const { selected } = fx.detectCurrency(req);
+  return { currency: selected, fxRate: fx.rateFor(selected), amountInCurrency: fx.convert(amountUsd, selected) };
+}
+
+// Orders created before multi-currency (or via offer acceptance) may have no
+// currency yet — lock the buyer's currency the first time they hit checkout.
+function ensureCurrency(order, req) {
+  if (order.currency || !req.user || req.user.id !== order.buyerId || order.status !== 'pending_payment') return order;
+  return db.orders.update(order.id, lockedCurrency(req, order.amount));
+}
+
 function decorateOrder(o, viewerId) {
   const product = db.products.byId(o.productId);
   const buyer = db.users.byId(o.buyerId);
   const seller = db.users.byId(o.sellerId);
+  const currency = o.currency || 'USD';
+  const amountInCurrency = o.amountInCurrency != null ? o.amountInCurrency : o.amount;
   return {
     ...o,
+    currency,
+    amountInCurrency,
+    charged: fx.format(amountInCurrency, currency), // e.g. "₹4,275.00"
     role: o.buyerId === viewerId ? 'buyer' : 'seller',
     product: product ? { id: product.id, title: product.title, image: product.image, thumb: product.thumb, category: product.category } : null,
     buyerName: buyer?.name || 'User',
     sellerName: seller?.name || 'User',
     reviewed: !!db.reviews.findOne((r) => r.productId === o.productId && r.buyerId === o.buyerId),
   };
+}
+
+// All orders of a checkout group that belong to this buyer.
+function ordersInGroup(groupId, buyerId) {
+  return db.orders.find((o) => o.groupId === groupId && o.buyerId === buyerId);
+}
+
+function groupTotals(orders) {
+  const currency = orders[0]?.currency || 'USD';
+  const totalUsd = Math.round(orders.reduce((s, o) => s + o.amount, 0) * 100) / 100;
+  const total = orders.reduce((s, o) => s + (o.amountInCurrency != null ? o.amountInCurrency : o.amount), 0);
+  const rounded = fx.CURRENCIES[currency]?.zeroDecimal ? Math.round(total) : Math.round(total * 100) / 100;
+  return { currency, totalUsd, total: rounded, totalFormatted: fx.format(rounded, currency) };
 }
 
 function notifyAdmins(text, link) {
@@ -47,6 +79,7 @@ module.exports = function ordersRouter(io) {
       buyerId: req.user.id,
       sellerId: product.sellerId,
       amount: product.price,
+      ...lockedCurrency(req, product.price),
       status: 'pending_payment',
       shipping: null,
       payment: null,
@@ -69,25 +102,121 @@ module.exports = function ordersRouter(io) {
     res.json({ purchases, sales });
   });
 
+  // Mark a single order paid + sold and fire all side effects.
+  // Shared by the single-order and cart-group payment paths.
+  function fulfillPaidOrder(order, cleanShipping, payment) {
+    const product = db.products.byId(order.productId);
+    db.orders.update(order.id, { status: 'paid', shipping: cleanShipping, payment });
+    db.products.update(product.id, { status: 'sold', buyerId: order.buyerId, soldPrice: order.amount, soldAt: new Date().toISOString() });
+    db.offers.find((o) => o.productId === product.id && o.status === 'pending').forEach((o) => db.offers.update(o.id, { status: 'rejected' }));
+
+    notify(order.sellerId, 'sale', `💰 You sold "${product.title}" for $${order.amount} — ship it to the buyer`, '/dashboard.html');
+    notify(order.buyerId, 'order', `Payment confirmed for "${product.title}". We'll notify you when it ships.`, '/dashboard.html');
+    const buyer = db.users.byId(order.buyerId);
+    if (buyer) sendOrderEmail(buyer, db.orders.byId(order.id), product).catch(() => {});
+    io.to(`user:${order.sellerId}`).emit('order:update', { orderId: order.id });
+  }
+
+  /* ------------------------- cart checkout groups ------------------------- */
+  // GET /api/orders/group/:groupId — all orders in a cart checkout (buyer only).
+  router.get('/group/:groupId', requireAuth, (req, res) => {
+    const orders = ordersInGroup(req.params.groupId, req.user.id);
+    if (!orders.length) return res.status(404).json({ error: 'Checkout not found' });
+    res.json({
+      orders: orders.map((o) => decorateOrder(o, req.user.id)),
+      ...groupTotals(orders),
+    });
+  });
+
+  // POST /api/orders/group/:groupId/payment-intent — one PaymentIntent for the
+  // whole cart, charged in the currency locked at checkout creation.
+  router.post('/group/:groupId/payment-intent', requireAuth, requireVerified, async (req, res) => {
+    if (!payments.enabled) return res.status(400).json({ error: 'Stripe is not configured' });
+    const orders = ordersInGroup(req.params.groupId, req.user.id).filter((o) => o.status === 'pending_payment');
+    if (!orders.length) return res.status(400).json({ error: 'No orders awaiting payment in this checkout' });
+    const { total, currency } = groupTotals(orders);
+    try {
+      const pi = await payments.createPaymentIntent(total, { groupId: req.params.groupId }, currency);
+      orders.forEach((o) => db.orders.update(o.id, { paymentIntentId: pi.id }));
+      res.json({ clientSecret: pi.clientSecret });
+    } catch (e) {
+      res.status(502).json({ error: 'Could not start payment: ' + e.message });
+    }
+  });
+
+  // POST /api/orders/group/:groupId/pay — finalize every order in the cart
+  // with a single payment (Stripe-confirmed or stub card).
+  router.post('/group/:groupId/pay', requireAuth, requireVerified, async (req, res) => {
+    const orders = ordersInGroup(req.params.groupId, req.user.id).filter((o) => o.status === 'pending_payment');
+    if (!orders.length) return res.status(400).json({ error: 'No orders awaiting payment in this checkout' });
+
+    const { shipping, card, paymentIntentId, saveAddress } = req.body || {};
+    if (!validShipping(shipping)) return res.status(400).json({ error: 'Complete your shipping address' });
+    const { total, currency } = groupTotals(orders);
+
+    let payment;
+    if (payments.enabled) {
+      const pid = paymentIntentId || orders[0].paymentIntentId;
+      if (!pid) return res.status(400).json({ error: 'Missing payment confirmation' });
+      const v = await payments.confirmPaymentIntent(pid, total, currency);
+      if (!v.ok) return res.status(400).json({ error: v.error });
+      payment = { brand: v.brand, last4: v.last4, paidAt: new Date().toISOString(), provider: 'stripe', paymentIntentId: pid };
+    } else {
+      const v = payments.validateStubCard(card);
+      if (!v.ok) return res.status(400).json({ error: v.error });
+      payment = { brand: v.brand, last4: v.last4, paidAt: new Date().toISOString(), provider: 'stub' };
+    }
+
+    const cleanShipping = { name: shipping.name, line1: shipping.line1, city: shipping.city, zip: shipping.zip, country: shipping.country || '' };
+    orders.forEach((o) => fulfillPaidOrder(o, cleanShipping, payment));
+
+    if (saveAddress) {
+      const list = req.user.addresses || [];
+      list.push({ id: db.genId(), ...cleanShipping, isDefault: list.length === 0 });
+      db.users.update(req.user.id, { addresses: list });
+    }
+
+    const fresh = ordersInGroup(req.params.groupId, req.user.id);
+    res.json({ orders: fresh.map((o) => decorateOrder(o, req.user.id)), ...groupTotals(fresh) });
+  });
+
+  // POST /api/orders/group/:groupId/cancel — abandon an unpaid cart checkout.
+  router.post('/group/:groupId/cancel', requireAuth, (req, res) => {
+    const orders = ordersInGroup(req.params.groupId, req.user.id).filter((o) => o.status === 'pending_payment');
+    if (!orders.length) return res.status(400).json({ error: 'Nothing to cancel' });
+    orders.forEach((o) => {
+      db.orders.update(o.id, { status: 'cancelled' });
+      const product = db.products.byId(o.productId);
+      if (product && product.status === 'reserved') db.products.update(product.id, { status: 'available', reservedBy: null });
+    });
+    res.json({ ok: true });
+  });
+
   // GET /api/orders/:id — order detail (participants only).
   router.get('/:id', requireAuth, (req, res) => {
-    const order = db.orders.byId(req.params.id);
+    let order = db.orders.byId(req.params.id);
     if (!order) return res.status(404).json({ error: 'Order not found' });
     if (![order.buyerId, order.sellerId].includes(req.user.id)) {
       return res.status(403).json({ error: 'Not your order' });
     }
+    order = ensureCurrency(order, req);
     res.json({ order: decorateOrder(order, req.user.id) });
   });
 
   // POST /api/orders/:id/payment-intent — create a Stripe PaymentIntent (Stripe mode only).
   router.post('/:id/payment-intent', requireAuth, requireVerified, async (req, res) => {
     if (!payments.enabled) return res.status(400).json({ error: 'Stripe is not configured' });
-    const order = db.orders.byId(req.params.id);
+    let order = db.orders.byId(req.params.id);
     if (!order) return res.status(404).json({ error: 'Order not found' });
     if (order.buyerId !== req.user.id) return res.status(403).json({ error: 'Not your order' });
     if (order.status !== 'pending_payment') return res.status(400).json({ error: 'Order is not awaiting payment' });
+    order = ensureCurrency(order, req);
     try {
-      const pi = await payments.createPaymentIntent(order.amount, { orderId: order.id });
+      const pi = await payments.createPaymentIntent(
+        order.amountInCurrency != null ? order.amountInCurrency : order.amount,
+        { orderId: order.id },
+        order.currency || 'USD'
+      );
       db.orders.update(order.id, { paymentIntentId: pi.id });
       res.json({ clientSecret: pi.clientSecret });
     } catch (e) {
@@ -97,10 +226,11 @@ module.exports = function ordersRouter(io) {
 
   // POST /api/orders/:id/pay — finalize payment (Stripe-confirmed or stub card).
   router.post('/:id/pay', requireAuth, requireVerified, async (req, res) => {
-    const order = db.orders.byId(req.params.id);
+    let order = db.orders.byId(req.params.id);
     if (!order) return res.status(404).json({ error: 'Order not found' });
     if (order.buyerId !== req.user.id) return res.status(403).json({ error: 'Not your order' });
     if (order.status !== 'pending_payment') return res.status(400).json({ error: 'This order is no longer awaiting payment' });
+    order = ensureCurrency(order, req);
 
     const { shipping, card, paymentIntentId, saveAddress } = req.body || {};
     if (!validShipping(shipping)) return res.status(400).json({ error: 'Complete your shipping address' });
@@ -110,7 +240,11 @@ module.exports = function ordersRouter(io) {
       // Stripe mode: the client already confirmed the PaymentIntent.
       const pid = paymentIntentId || order.paymentIntentId;
       if (!pid) return res.status(400).json({ error: 'Missing payment confirmation' });
-      const v = await payments.confirmPaymentIntent(pid, order.amount);
+      const v = await payments.confirmPaymentIntent(
+        pid,
+        order.amountInCurrency != null ? order.amountInCurrency : order.amount,
+        order.currency || 'USD'
+      );
       if (!v.ok) return res.status(400).json({ error: v.error });
       payment = { brand: v.brand, last4: v.last4, paidAt: new Date().toISOString(), provider: 'stripe', paymentIntentId: pid };
     } else {
@@ -121,9 +255,7 @@ module.exports = function ordersRouter(io) {
     }
 
     const cleanShipping = { name: shipping.name, line1: shipping.line1, city: shipping.city, zip: shipping.zip, country: shipping.country || '' };
-    const product = db.products.byId(order.productId);
-    db.orders.update(order.id, { status: 'paid', shipping: cleanShipping, payment });
-    db.products.update(product.id, { status: 'sold', buyerId: order.buyerId, soldPrice: order.amount, soldAt: new Date().toISOString() });
+    fulfillPaidOrder(order, cleanShipping, payment);
 
     // Optionally remember this shipping address for next time.
     if (saveAddress) {
@@ -131,14 +263,6 @@ module.exports = function ordersRouter(io) {
       list.push({ id: db.genId(), ...cleanShipping, isDefault: list.length === 0 });
       db.users.update(req.user.id, { addresses: list });
     }
-
-    db.offers.find((o) => o.productId === product.id && o.status === 'pending').forEach((o) => db.offers.update(o.id, { status: 'rejected' }));
-
-    notify(order.sellerId, 'sale', `💰 You sold "${product.title}" for $${order.amount} — ship it to the buyer`, '/dashboard.html');
-    notify(order.buyerId, 'order', `Payment confirmed for "${product.title}". We'll notify you when it ships.`, '/dashboard.html');
-    const buyer = db.users.byId(order.buyerId);
-    if (buyer) sendOrderEmail(buyer, db.orders.byId(order.id), product).catch(() => {});
-    io.to(`user:${order.sellerId}`).emit('order:update', { orderId: order.id });
 
     res.json({ order: decorateOrder(db.orders.byId(order.id), req.user.id) });
   });

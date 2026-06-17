@@ -14,19 +14,36 @@
   <div class="container" style="max-width:760px" id="root"><div class="empty">Loading checkout…</div></div>
 
   <script>
+    // Supports two flows: ?order=<id> (Buy Now / accepted offer) and
+    // ?group=<id> (cart checkout — many orders, one payment).
     const orderId = new URLSearchParams(location.search).get('order');
-    let ORDER = null, CONFIG = null, ADDRESSES = [], stripe = null, stripeElements = null;
+    const groupId = new URLSearchParams(location.search).get('group');
+
+    let ORDERS = [], TOTAL = null, CONFIG = null, ADDRESSES = [], stripe = null, stripeElements = null;
+
+    const apiBase = () => (groupId ? `/orders/group/${groupId}` : `/orders/${orderId}`);
 
     async function load() {
       try {
-        const [{ order }, config, { addresses }] = await Promise.all([
-          api('/orders/' + orderId),
+        const [checkout, config, { addresses }] = await Promise.all([
+          groupId ? api(apiBase()) : api(apiBase()).then(({ order }) => ({
+            orders: [order],
+            currency: order.currency,
+            total: order.amountInCurrency,
+            totalUsd: order.amount,
+            totalFormatted: order.charged,
+          })),
           api('/config'),
           api('/auth/addresses').catch(() => ({ addresses: [] })),
+          Currency.ready,
         ]);
-        ORDER = order; CONFIG = config; ADDRESSES = addresses || [];
-        if (order.status !== 'pending_payment') return done(order);
-        render(order);
+        ORDERS = checkout.orders;
+        TOTAL = checkout;
+        CONFIG = config;
+        ADDRESSES = addresses || [];
+        const pending = ORDERS.filter((o) => o.status === 'pending_payment');
+        if (!pending.length) return done(ORDERS, false);
+        render();
         if (CONFIG.stripeEnabled) await initStripe();
       } catch (e) { document.getElementById('root').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
     }
@@ -40,12 +57,25 @@
         </select>`;
     }
 
-    function render(o) {
-      const p = o.product;
+    function itemLine(o) {
+      const p = o.product || {};
+      return `<div class="row between" style="gap:12px;margin-bottom:10px">
+        <div class="row" style="gap:10px">
+          ${p.thumb || p.image ? `<img src="${p.thumb || p.image}" style="width:48px;height:48px;border-radius:8px;object-fit:cover">` : ''}
+          <div><strong style="font-size:14px">${esc(p.title || 'Item')}</strong>
+          <div class="muted" style="font-size:12px">Sold by ${esc(o.sellerName)}</div></div>
+        </div>
+        <span>${esc(o.charged)}</span>
+      </div>`;
+    }
+
+    function render() {
+      const pending = ORDERS.filter((o) => o.status === 'pending_payment');
       const def = ADDRESSES.find((a) => a.isDefault) || {};
+      const cur = TOTAL.currency || 'USD';
       document.getElementById('root').innerHTML = `
-        <a href="dashboard.html" class="muted">← Cancel & go back</a>
-        <h1 style="margin-top:10px">Checkout</h1>
+        <a href="${groupId ? 'cart.html' : 'dashboard.html'}" class="muted" id="backLink" style="cursor:pointer">← Cancel & go back</a>
+        <h1 style="margin-top:10px">Checkout ${groupId ? `<span class="tag eco">🛒 ${pending.length} item${pending.length > 1 ? 's' : ''}</span>` : ''}</h1>
         <div class="row wrap" style="align-items:flex-start;gap:20px">
           <div style="flex:1;min-width:300px">
             <div class="card">
@@ -74,20 +104,25 @@
           <div style="flex:1;min-width:260px">
             <div class="card">
               <h2>Order summary</h2>
-              <div class="row" style="gap:12px;margin-bottom:12px">
-                ${p?.thumb || p?.image ? `<img src="${p.thumb || p.image}" style="width:64px;height:64px;border-radius:9px;object-fit:cover">` : ''}
-                <div><strong>${esc(p?.title || 'Item')}</strong><div class="muted" style="font-size:13px">Sold by ${esc(o.sellerName)}</div></div>
-              </div>
-              <div class="row between"><span class="muted">Item price</span><span>$${o.amount}</span></div>
+              ${pending.map(itemLine).join('')}
               <div class="row between"><span class="muted">Shipping</span><span>Free</span></div>
               <hr style="border-color:var(--border);margin:12px 0">
-              <div class="row between" style="font-size:18px"><strong>Total</strong><strong style="color:var(--brand)">$${o.amount}</strong></div>
-              <button class="btn" id="payBtn" style="width:100%;margin-top:16px">Pay $${o.amount}</button>
-              <p class="muted" style="font-size:12px;text-align:center;margin-top:8px">🌱 This reused item saves CO₂ vs buying new.</p>
+              <div class="row between" style="font-size:18px"><strong>Total</strong><strong style="color:var(--brand)">${esc(TOTAL.totalFormatted)}</strong></div>
+              <div class="muted" style="font-size:12px;text-align:right">${usdHint(TOTAL.totalUsd)}</div>
+              ${cur !== 'USD' ? `<p class="muted" style="font-size:12px;margin-top:8px">💱 You'll be charged in <strong>${cur}</strong> — rate locked when this checkout was created.</p>` : ''}
+              <button class="btn" id="payBtn" style="width:100%;margin-top:16px">Pay ${esc(TOTAL.totalFormatted)}</button>
+              <p class="muted" style="font-size:12px;text-align:center;margin-top:8px">🌱 Reused items save CO₂ vs buying new.</p>
             </div>
           </div>
         </div>`;
       document.getElementById('payBtn').onclick = pay;
+      if (groupId) document.getElementById('backLink').onclick = cancelGroup;
+    }
+
+    async function cancelGroup(e) {
+      e.preventDefault();
+      try { await api(`/orders/group/${groupId}/cancel`, { method: 'POST' }); } catch { /* already resolved */ }
+      location.href = 'index.html';
     }
 
     function stubCardForm() {
@@ -111,11 +146,12 @@
       document.getElementById('saveAddr').checked = false;
     }
 
-    // ----- Stripe (only when configured) -----
+    // ----- Stripe (only when configured). The PaymentIntent is created in the
+    // buyer's currency for the locked converted amount. -----
     async function initStripe() {
       await loadScript('https://js.stripe.com/v3/');
       stripe = Stripe(CONFIG.stripePublishableKey);
-      const { clientSecret } = await api(`/orders/${orderId}/payment-intent`, { method: 'POST' });
+      const { clientSecret } = await api(`${apiBase()}/payment-intent`, { method: 'POST' });
       stripeElements = stripe.elements({ clientSecret, appearance: { theme: 'night', variables: { colorPrimary: '#2ecc71' } } });
       stripeElements.create('payment').mount('#payment-element');
       document.getElementById('stripeStatus').textContent = 'Enter your card — test mode card 4242 4242 4242 4242.';
@@ -142,29 +178,34 @@
         if (CONFIG.stripeEnabled) {
           const { error } = await stripe.confirmPayment({ elements: stripeElements, redirect: 'if_required' });
           if (error) throw new Error(error.message);
-          // PaymentIntent confirmed; server will verify it.
+          // PaymentIntent confirmed; server will verify amount + currency.
         } else {
           body.card = { number: val('c_number'), exp: val('c_exp'), cvc: val('c_cvc') };
         }
-        const { order } = await api(`/orders/${orderId}/pay`, { method: 'POST', body });
-        done(order, true);
+        const result = await api(`${apiBase()}/pay`, { method: 'POST', body });
+        done(result.orders || [result.order], true);
       } catch (e) {
         toast(e.message, true);
-        btn.disabled = false; btn.textContent = `Pay $${ORDER.amount}`;
+        btn.disabled = false; btn.textContent = `Pay ${TOTAL.totalFormatted}`;
       }
     }
 
-    function done(o, justPaid) {
+    function done(orders, justPaid) {
+      const paid = orders.filter((o) => o.status !== 'cancelled');
+      const first = paid[0] || orders[0];
+      const totalLine = paid.length > 1
+        ? `${paid.length} items · ${esc(TOTAL?.totalFormatted || '')}`
+        : `Order #${first.id} · ${esc(first.charged)} · ${esc(first.product?.title || '')}`;
       document.getElementById('root').innerHTML = `
-        <div class="card" style="text-align:center;max-width:480px;margin:30px auto">
+        <div class="card" style="text-align:center;max-width:520px;margin:30px auto">
           <div style="font-size:54px">🎉</div>
-          <h1>${justPaid ? 'Payment successful!' : 'Order ' + o.status}</h1>
-          <p class="muted">Order #${o.id} · $${o.amount} · ${esc(o.product?.title || '')}</p>
-          ${o.payment ? `<p class="muted">Paid with ${o.payment.brand} •••• ${o.payment.last4}</p>` : ''}
-          <p>The seller has been notified to ship your item.</p>
-          <div class="row" style="justify-content:center;gap:10px;margin-top:8px">
-            <button class="btn ghost" onclick="downloadAuthed('/orders/${o.id}/receipt','receipt-${o.id}.pdf')">⬇ Download receipt (PDF)</button>
-            <a class="btn" href="dashboard.html">My orders →</a>
+          <h1>${justPaid ? 'Payment successful!' : 'Order ' + first.status}</h1>
+          <p class="muted">${totalLine}</p>
+          ${first.payment ? `<p class="muted">Paid with ${first.payment.brand} •••• ${first.payment.last4}${first.currency && first.currency !== 'USD' ? ` · charged in ${first.currency}` : ''}</p>` : ''}
+          <p>The seller${paid.length > 1 ? 's have' : ' has'} been notified to ship your item${paid.length > 1 ? 's' : ''}.</p>
+          <div class="row wrap" style="justify-content:center;gap:10px;margin-top:8px">
+            ${paid.map((o) => `<button class="btn ghost sm" onclick="downloadAuthed('/orders/${o.id}/receipt','receipt-${o.id}.pdf')">⬇ Receipt${paid.length > 1 ? ' · ' + esc((o.product?.title || '').slice(0, 18)) : ' (PDF)'}</button>`).join('')}
+            <a class="btn" href="transactions.html">My orders →</a>
           </div>
         </div>`;
     }

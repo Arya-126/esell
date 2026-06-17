@@ -36,7 +36,7 @@
 
     async function load() {
       try {
-        const { product } = await api('/products/' + id);
+        const [{ product }] = await Promise.all([api('/products/' + id), Currency.ready]);
         PRODUCT = product;
         render(product);
       } catch (e) { root.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
@@ -51,7 +51,7 @@
                           : `<div class="thumb" style="height:380px;border-radius:14px;font-size:60px;display:grid;place-items:center;background:var(--surface-2)">🖼️</div>`;
       const fair = p.fair && p.fair.label !== 'No data'
         ? `<div class="pill-row"><span class="tag ${p.fair.label==='Great deal'?'deal':p.fair.label==='Above average'?'high':''}">${p.fair.label}</span>
-           <span class="muted" style="font-size:12px">vs ~$${p.fair.avg} avg in ${esc(p.category)}</span></div>` : '';
+           <span class="muted" style="font-size:12px">vs ~${money(p.fair.avg)} avg in ${esc(p.category)}</span></div>` : '';
 
       root.innerHTML = `
         <a href="index.html" class="muted">← Back to marketplace</a>
@@ -63,7 +63,8 @@
               ${sold ? '<span class="tag high">SOLD</span>' : reserved ? '<span class="tag high">SALE PENDING</span>' : ''}
             </div>
             <h1 style="margin-top:10px">${esc(p.title)}</h1>
-            <div class="price" style="font-size:34px;font-weight:800;color:var(--brand)">$${p.price}</div>
+            <div class="price" style="font-size:34px;font-weight:800;color:var(--brand)">${money(p.price)}</div>
+            <div class="muted" style="font-size:13px">${usdHint(p.price)}</div>
             ${fair}
             <div class="pill-row">
               <span class="tag eco">🌱 Saves ~${p.ecoSaved}kg CO₂ vs buying new</span>
@@ -95,6 +96,7 @@
       if (document.getElementById('chatBtn')) document.getElementById('chatBtn').onclick = startChat;
       if (document.getElementById('offerBtn')) document.getElementById('offerBtn').onclick = openOffer;
       if (document.getElementById('buyBtn')) document.getElementById('buyBtn').onclick = buyNow;
+      if (document.getElementById('cartAddBtn')) document.getElementById('cartAddBtn').onclick = addToCart;
       if (document.getElementById('reportBtn')) document.getElementById('reportBtn').onclick = report;
       if (document.getElementById('editBtn')) document.getElementById('editBtn').onclick = () => location.href = 'dashboard.html';
     }
@@ -111,7 +113,8 @@
       if (reserved) return `<span class="muted">⏳ A sale is pending on this item.</span>`;
       const verifyNote = me.verified ? '' : `<div class="muted" style="font-size:12px;flex-basis:100%">✉️ Verify your email (banner above) to buy or sell.</div>`;
       return `
-        <button class="btn" id="buyBtn">🛒 Buy now · $${p.price}</button>
+        <button class="btn" id="buyBtn">⚡ Buy now · ${money(p.price)}</button>
+        <button class="btn accent" id="cartAddBtn">🛒 Add to cart</button>
         <button class="btn accent" id="offerBtn">🤝 Make an offer</button>
         <button class="btn ghost" id="chatBtn">💬 Chat</button>
         <button class="btn ghost" id="watchBtn">${p.isWatched ? '★ Watching' : '☆ Watch price'}</button>
@@ -123,6 +126,14 @@
       try {
         const { order } = await api('/orders', { method: 'POST', body: { productId: id } });
         location.href = 'checkout.html?order=' + order.id;
+      } catch (e) { toast(e.message, true); }
+    }
+
+    async function addToCart() {
+      try {
+        await api('/cart', { method: 'POST', body: { productId: id } });
+        refreshCartBadge();
+        toast('Added to cart 🛒');
       } catch (e) { toast(e.message, true); }
     }
 
@@ -150,7 +161,7 @@
 
     // Offer modal
     function openOffer() {
-      document.getElementById('offerSub').textContent = `Listed at $${PRODUCT.price}. The seller can accept, decline or counter.`;
+      document.getElementById('offerSub').textContent = `Listed at $${PRODUCT.price} USD (${money(PRODUCT.price)}). Offers are made in USD; the seller can accept, decline or counter.`;
       document.getElementById('offerModal').classList.add('open');
     }
     function closeOffer() { document.getElementById('offerModal').classList.remove('open'); }

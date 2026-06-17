@@ -55,7 +55,7 @@
           <div class="thumb">${img}</div>
           <div class="body">
             <div class="title">${esc(p.title)}</div>
-            <div class="price">$${p.price}</div>
+            <div class="price">${money(p.price)}</div>
             <div class="pill-row">
               <span class="tag cond">${esc(p.condition)}</span>
               <span class="tag eco">🌱 ${p.ecoSaved}kg CO₂</span>
@@ -67,6 +67,7 @@
     }
 
     async function load() {
+      await Currency.ready; // prices render in the viewer's currency
       const params = new URLSearchParams({
         q: document.getElementById('q').value,
         category: document.getElementById('category').value,

@@ -31,8 +31,9 @@
 
         <div class="row" style="gap:14px">
           <div style="flex:1">
-            <label>Price (USD) *</label>
+            <label id="priceLabel">Price *</label>
             <input id="price" type="number" min="0" step="0.01" placeholder="45" required />
+            <div class="muted" id="priceHint" style="font-size:12px;margin-top:4px"></div>
           </div>
           <div style="flex:1">
             <label>Category *</label>
@@ -60,10 +61,23 @@
   <script>
     let CATS = [];
     (async () => {
-      const { categories, conditions } = await api('/products');
+      const [{ categories, conditions }] = await Promise.all([api('/products'), Currency.ready]);
       CATS = categories;
       document.getElementById('category').innerHTML = categories.map((c) => `<option>${c}</option>`).join('');
       document.getElementById('condition').innerHTML = conditions.map((c) => `<option ${c === 'Good' ? 'selected' : ''}>${c}</option>`).join('');
+
+      // Sellers enter their price in their own currency; the catalog stores
+      // USD and converts live for every viewer.
+      document.getElementById('priceLabel').textContent = `Price (${Currency.code}) *`;
+      if (Currency.code !== 'USD') {
+        const hint = document.getElementById('priceHint');
+        const update = () => {
+          const v = Number(document.getElementById('price').value);
+          const rate = Currency.data.rates[Currency.code] || 1;
+          hint.textContent = v > 0 ? `≈ $${(v / rate).toFixed(2)} USD — buyers worldwide see it in their own currency` : '';
+        };
+        document.getElementById('price').addEventListener('input', update);
+      }
     })();
 
     document.getElementById('image').onchange = (e) => {
@@ -81,6 +95,7 @@
       if (file) fd.append('image', file);
       fd.append('title', document.getElementById('title').value);
       fd.append('price', document.getElementById('price').value);
+      fd.append('currency', Currency.code);
       fd.append('category', document.getElementById('category').value);
       fd.append('condition', document.getElementById('condition').value);
       fd.append('location', document.getElementById('location').value);

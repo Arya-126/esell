@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Transactions · ReWear</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="js/app.js"></script>
+  <script>renderNav(''); requireLogin();</script>
+
+  <div class="container" style="max-width:980px">
+    <div class="row between wrap">
+      <div>
+        <h1>🧾 Transaction history</h1>
+        <p class="muted">Every payment in and out of your account, with order tracking. Manage open orders in your <a href="dashboard.html">dashboard</a>.</p>
+      </div>
+      <div class="row" style="gap:6px">
+        <button class="btn ghost sm" data-f="all">All</button>
+        <button class="btn ghost sm" data-f="purchase">Purchases</button>
+        <button class="btn ghost sm" data-f="sale">Sales</button>
+      </div>
+    </div>
+    <div class="stat-grid" style="margin:16px 0 20px">
+      <div class="stat"><div class="num" id="spentStat">—</div><div class="lbl">💸 Total spent</div></div>
+      <div class="stat green"><div class="num" id="earnedStat">—</div><div class="lbl">💰 Total earned</div></div>
+      <div class="stat"><div class="num" id="txStat">0</div><div class="lbl">Completed transactions</div></div>
+    </div>
+    <div id="list"><div class="empty">Loading transactions…</div></div>
+  </div>
+
+  <script>
+    let TX = [];
+    let FILTER = 'all';
+
+    const STEPS = ['pending_payment', 'paid', 'shipped', 'delivered'];
+    const STEP_LABEL = { pending_payment: 'Awaiting payment', paid: 'Paid', shipped: 'Shipped', delivered: 'Delivered' };
+
+    function timeline(o) {
+      if (o.status === 'cancelled') return '<span class="tag high">Cancelled</span>';
+      if (o.status === 'refunded') return '<span class="tag high">↩ Refunded</span>';
+      const idx = STEPS.indexOf(o.status);
+      return `<div class="row" style="gap:4px;flex-wrap:wrap">` + STEPS.map((s, i) => {
+        const done = i <= idx;
+        return `<span class="tag" style="background:${done ? 'rgba(46,204,113,.16)' : 'var(--surface-2)'};color:${done ? 'var(--brand)' : 'var(--muted)'}">${done && i < idx ? '✓ ' : ''}${STEP_LABEL[s]}</span>${i < STEPS.length - 1 ? '<span class="muted">→</span>' : ''}`;
+      }).join('') + `</div>`;
+    }
+
+    async function load() {
+      const [{ purchases, sales }] = await Promise.all([api('/orders/mine'), Currency.ready]);
+      TX = [
+        ...purchases.map((o) => ({ ...o, kind: 'purchase' })),
+        ...sales.map((o) => ({ ...o, kind: 'sale' })),
+      ].sort((a, b) => (b.payment?.paidAt || b.createdAt).localeCompare(a.payment?.paidAt || a.createdAt));
+
+      const completed = TX.filter((o) => ['paid', 'shipped', 'delivered'].includes(o.status));
+      const spent = completed.filter((o) => o.kind === 'purchase').reduce((s, o) => s + o.amount, 0);
+      const earned = completed.filter((o) => o.kind === 'sale').reduce((s, o) => s + o.amount, 0);
+      document.getElementById('spentStat').textContent = money(spent);
+      document.getElementById('earnedStat').textContent = money(earned);
+      document.getElementById('txStat').textContent = completed.length;
+      render();
+    }
+
+    function render() {
+      const list = document.getElementById('list');
+      document.querySelectorAll('[data-f]').forEach((b) => b.classList.toggle('ghost', b.dataset.f !== FILTER));
+      const rows = TX.filter((o) => FILTER === 'all' || o.kind === FILTER);
+      if (!rows.length) { list.innerHTML = '<div class="empty">No transactions yet. Buy or sell something to get started!</div>'; return; }
+      list.innerHTML = rows.map(row).join('');
+    }
+
+    function row(o) {
+      const p = o.product || {};
+      const date = new Date(o.payment?.paidAt || o.createdAt).toLocaleString();
+      const dir = o.kind === 'purchase'
+        ? `<span class="tag" style="background:rgba(229,72,77,.14);color:var(--danger)">− ${o.charged}</span>`
+        : `<span class="tag eco">+ ${o.charged}</span>`;
+      const method = o.payment
+        ? `${o.payment.brand} •••• ${o.payment.last4} · ${o.payment.provider === 'stripe' ? 'Stripe' : 'demo'}${o.currency && o.currency !== 'USD' ? ` · charged in ${o.currency} @ ${o.fxRate}` : ''}`
+        : 'Not paid yet';
+      const receipt = ['paid', 'shipped', 'delivered', 'refunded'].includes(o.status)
+        ? `<button class="btn ghost sm" onclick="downloadAuthed('/orders/${o.id}/receipt','receipt-${o.id}.pdf')">⬇ Receipt</button>` : '';
+      const payNow = o.kind === 'purchase' && o.status === 'pending_payment'
+        ? `<button class="btn sm" onclick="location.href='checkout.html?${o.groupId ? 'group=' + o.groupId : 'order=' + o.id}'">Complete payment</button>` : '';
+      return `<div class="card" style="margin-bottom:10px">
+        <div class="row between wrap" style="gap:12px">
+          <div class="row" style="gap:12px">
+            ${(p.thumb || p.image) ? `<img src="${p.thumb || p.image}" style="width:54px;height:54px;border-radius:9px;object-fit:cover">` : '<div style="font-size:28px">🖼️</div>'}
+            <div>
+              <strong>${esc(p.title || 'Item')}</strong> ${dir} ${o.currency && o.currency !== 'USD' ? `<span class="muted" style="font-size:11px">($${o.amount} USD)</span>` : ''}
+              <div class="muted" style="font-size:12px">${date} · ${o.kind === 'purchase' ? 'bought from ' + esc(o.sellerName) : 'sold to ' + esc(o.buyerName)} · #${o.id.slice(-6)}${o.groupId ? ' · 🛒 cart order' : ''}</div>
+              <div class="muted" style="font-size:12px">💳 ${esc(method)}${o.tracking ? ' · 📦 tracking #' + esc(o.tracking) : ''}</div>
+              <div style="margin-top:6px">${timeline(o)}</div>
+            </div>
+          </div>
+          <div class="row wrap" style="gap:6px">${payNow}${receipt}</div>
+        </div>
+      </div>`;
+    }
+
+    document.querySelectorAll('[data-f]').forEach((b) => { b.onclick = () => { FILTER = b.dataset.f; render(); }; });
+    load();
+  </script>
+</body>
+</html>

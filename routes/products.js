@@ -6,6 +6,7 @@ const db = require('../db');
 const { requireAuth, optionalAuth, requireVerified } = require('../middleware/auth');
 const { ecoSavedFor, fairPrice, trustScoreFor, publicUser, notify } = require('../lib/helpers');
 const { makeThumbnail } = require('../lib/images');
+const fx = require('../lib/currency');
 
 const router = express.Router();
 
@@ -82,8 +83,12 @@ router.post('/', requireAuth, requireVerified, upload.single('image'), async (re
     return res.status(400).json({ error: 'Title, price and category are required' });
   }
   if (!CATEGORIES.includes(category)) return res.status(400).json({ error: 'Invalid category' });
-  const priceNum = Number(price);
-  if (!(priceNum >= 0)) return res.status(400).json({ error: 'Invalid price' });
+  const entered = Number(price);
+  if (!(entered >= 0)) return res.status(400).json({ error: 'Invalid price' });
+  // Sellers can list in any supported currency; the catalog stores USD (base)
+  // so every viewer sees a live conversion into their own currency.
+  const listedCurrency = fx.isSupported(req.body.currency) ? fx.normalize(req.body.currency) : 'USD';
+  const priceNum = listedCurrency === 'USD' ? entered : fx.toUsd(entered, listedCurrency);
 
   let image = null;
   let thumb = null;
@@ -95,7 +100,9 @@ router.post('/', requireAuth, requireVerified, upload.single('image'), async (re
     sellerId: req.user.id,
     title: title.slice(0, 120),
     description: (description || '').slice(0, 4000),
-    price: priceNum,
+    price: Math.round(priceNum * 100) / 100,
+    listedCurrency,
+    listedPrice: entered,
     category,
     condition: CONDITIONS.includes(condition) ? condition : 'Good',
     location: (location || '').slice(0, 80),

@@ -16,11 +16,23 @@ so it installs and runs anywhere (including Windows) with no database setup.
 - 🖼️ **Image thumbnails** — uploads are auto-downscaled (pure-JS Jimp) so grids load fast
   while product pages keep the full image
 - 🛒 **Browse** — search, filter by category/condition/price, and sort
-- 💳 **Checkout & orders** — Buy Now or pay an accepted offer. **Real Stripe** when keys
-  are configured (PaymentIntents + Stripe Elements), or a Luhn-validated demo stub
-  otherwise — full numbers are never stored. Full order lifecycle:
-  *pending → paid → shipped → delivered*, with seller fulfilment and buyer delivery
-  confirmation
+- 💱 **Multi-currency catalog** — prices are stored in USD and shown to every visitor in
+  their own currency (17 supported, incl. EUR, GBP, INR, JPY) using **live exchange
+  rates** refreshed hourly from a free exchange-rate API (offline fallback snapshot
+  included). The viewer's currency is **auto-detected from their location** (CDN geo
+  headers, then browser locale) and can be overridden with the navbar picker — the
+  choice is remembered per user. Sellers can list in their own currency too.
+- 🛒 **Shopping cart** — add multiple one-of-a-kind items, then check out with a
+  **single payment** that covers all of them (each seller still ships separately)
+- 💳 **Checkout & orders** — Buy Now, cart checkout, or pay an accepted offer.
+  **Real Stripe** when keys are configured (PaymentIntents + Stripe Elements,
+  **charged in the buyer's currency** with the fx rate locked at checkout), or a
+  Luhn-validated demo stub otherwise — full numbers are never stored. Full order
+  lifecycle: *pending → paid → shipped → delivered*, with seller fulfilment and buyer
+  delivery confirmation
+- 🧾 **Transaction history** — a dedicated page with every payment in/out, totals
+  spent/earned, payment method, currency + locked fx rate, tracking numbers and a
+  status timeline for each order
 - 🧾 **PDF receipts** — every paid order has a downloadable receipt (generated with pdfkit)
 - ↩️ **Refunds & disputes** — buyers open a dispute / request a refund; sellers or admins
   approve (issuing a real Stripe refund when live) or decline; admins get a disputes queue
@@ -61,14 +73,31 @@ server.js            Express + Socket.io entry point
 db.js                Tiny JSON-file datastore (collections, no native deps)
 seed.js              Demo data loader
 lib/helpers.js       Eco / trust / fair-price domain logic
+lib/currency.js      Multi-currency engine: live fx rates, conversion, geo detection
+lib/payments.js      Stripe layer (currency-aware PaymentIntents) + demo stub
 middleware/auth.js   JWT auth (Bearer + cookie), role + verified guards
 lib/mailer.js        Email (nodemailer if SMTP_* set, else dev console)
 lib/images.js        Jimp thumbnail generation
-routes/              auth · products · chat · offers · orders · admin · notifications
+routes/              auth · products · cart · currency · chat · offers · orders · admin · notifications
 public/              Frontend (vanilla JS, no build step)
 data/                Auto-created JSON storage (git-ignore this)
 uploads/             Auto-created product images
 ```
+
+## Contributing (open-source roadmap)
+
+The codebase is deliberately small and dependency-light so it's easy to extend.
+Great first contributions:
+
+- **Payment methods** — `lib/payments.js` isolates the payment provider; add
+  PayPal, Razorpay, etc. behind the same `createPaymentIntent` / `confirm` / `refund`
+  interface and expose it via `/api/config`.
+- **More currencies / language support** — add entries to `CURRENCIES` and
+  `COUNTRY_CURRENCY` in `lib/currency.js`; UI strings live in the `public/*.html`
+  pages and are straightforward to externalise into a locale file.
+- **Product recommendations** — `lib/helpers.js` already computes category/price
+  signals; a "similar items" endpoint + carousel on `product.html` is a neat,
+  self-contained feature.
 
 ## Payment & email (test/demo)
 - **Checkout is a stub** — no real money moves. Use test card `4242 4242 4242 4242`,
@@ -83,6 +112,10 @@ uploads/             Auto-created product images
 | `JWT_SECRET` | sign tokens (set a strong value in production) |
 | `APP_URL` | base URL used in email links (default `http://localhost:3000`) |
 | `SMTP_HOST` `SMTP_PORT` `SMTP_USER` `SMTP_PASS` `SMTP_SECURE` `MAIL_FROM` | enable real email |
+| `STRIPE_SECRET_KEY` `STRIPE_PUBLISHABLE_KEY` | enable real Stripe payments |
+| `EXCHANGE_RATE_API_KEY` | use exchangerate-api.com v6 for live fx rates (default: open.er-api.com, no key) |
+| `EXCHANGE_RATE_API_URL` | custom rates endpoint returning `{ rates: {...} }` per 1 USD |
+| `FX_REFRESH_MINUTES` | live-rate refresh interval (default 60) |
 
 ## Deployment
 

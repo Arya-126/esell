@@ -21,6 +21,7 @@ const COLLECTIONS = [
   'notifications',
   'reports',
   'orders',
+  'carts',
 ];
 
 const store = {};
@@ -130,4 +131,5 @@ module.exports = {
   notifications: collection('notifications'),
   reports: collection('reports'),
   orders: collection('orders'),
+  carts: collection('carts'),
 };

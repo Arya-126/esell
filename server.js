@@ -16,6 +16,8 @@ const offersRoutes = require('./routes/offers');
 const ordersRoutes = require('./routes/orders');
 const adminRoutes = require('./routes/admin');
 const notificationRoutes = require('./routes/notifications');
+const currencyRoutes = require('./routes/currency');
+const cartRoutes = require('./routes/cart');
 
 const payments = require('./lib/payments');
 
@@ -41,6 +43,8 @@ app.use('/api/offers', offersRoutes(io));
 app.use('/api/orders', ordersRoutes(io));
 app.use('/api/admin', adminRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/currency', currencyRoutes);
+app.use('/api/cart', cartRoutes);
 
 app.get('/api/health', (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
