@@ -47,6 +47,7 @@ for (const [category, { images, items }] of Object.entries(CATALOG)) {
     const img = productImage(title, images, i);
     products.push(
       db.products.insert({
+        id: slugify(title), // stable id across reseeds -> AI index stays valid
         sellerId: seller.user.id,
         title,
         description,
