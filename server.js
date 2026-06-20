@@ -138,13 +138,28 @@ if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
   process.exit(1);
 }
 
+// Seed-if-empty: on an empty database with AUTO_SEED=true, load the demo dataset
+// before accepting connections. Preserves existing data (it only seeds when the
+// DB is empty), so it's safe with a persistent disk and ideal for hosts with an
+// ephemeral filesystem that start empty on each boot (e.g. Render free tier).
+if (process.env.AUTO_SEED === 'true' && db.users.count() === 0) {
+  try {
+    const { seed } = require('./lib/seed-data');
+    const c = seed(db);
+    db.flushSync();
+    console.log(`  🌱 AUTO_SEED loaded demo data: ${c.products} products, ${c.users} users.`);
+  } catch (e) {
+    console.error('  ✖ AUTO_SEED failed:', e.message);
+  }
+}
+
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`\n  🛍️  ReWear marketplace running at http://localhost:${PORT}`);
   console.log(`     payments: ${payments.enabled ? 'Stripe (live keys detected)' : 'demo stub'}\n`);
   if (db.users.count() === 0) {
     console.log('  → No users yet. The FIRST account you register becomes the ADMIN.');
-    console.log('  → Or run `npm run seed` to load demo data (admin@rewear.dev / password123).\n');
+    console.log('  → Or run `npm run seed` (or set AUTO_SEED=true) to load demo data.\n');
   }
 });
 
