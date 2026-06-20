@@ -6,3 +6,5 @@ uploads
 .git
 .gitignore
 *.md
+ai-service
+smoke-test.js

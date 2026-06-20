@@ -1,5 +1,10 @@
-/* Loads demo data so you can explore the app immediately.
-   Run:  npm run seed   (wipes data/ first)                    */
+/* Loads a rich demo dataset so the marketplace (and the AI assistant) feel real.
+   Run:  npm run seed   (wipes data/ first)
+
+   Catalog data lives in seed-catalog.js. Each product uses its fetched photo at
+   /seed-assets/products/<slug>.jpg when present (run `node fetch-images.js`),
+   otherwise a committed category fallback image — so it always works, even on a
+   host with an ephemeral filesystem (e.g. Render) with no uploads volume. */
 const fs = require('fs');
 const path = require('path');
 const bcrypt = require('bcryptjs');
@@ -8,92 +13,119 @@ const DATA_DIR = path.join(__dirname, 'data');
 if (fs.existsSync(DATA_DIR)) fs.rmSync(DATA_DIR, { recursive: true, force: true });
 
 const db = require('./db'); // recreates data dir
-const { generatePlaceholder, makeThumbnail } = require('./lib/images');
+const { SELLER_DEFS, CATALOG, slugify } = require('./seed-catalog');
 
-const UPLOAD_DIR = path.join(__dirname, 'uploads');
-if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-
+const PRODUCTS_IMG_DIR = path.join(__dirname, 'public', 'seed-assets', 'products');
 const hash = (pw) => bcrypt.hashSync(pw, 10);
-
 const V = { verified: true, verifyToken: null }; // seeded users are pre-verified
-const admin = db.users.insert({ name: 'Site Admin', email: 'admin@rewear.dev', passwordHash: hash('password123'), role: 'admin', bio: 'Keeping ReWear friendly.', banned: false, ...V });
-const maya = db.users.insert({ name: 'Maya Chen', email: 'maya@rewear.dev', passwordHash: hash('password123'), role: 'user', bio: 'Decluttering my apartment. Everything priced to go!', banned: false, ...V });
-const leo = db.users.insert({ name: 'Leo Park', email: 'leo@rewear.dev', passwordHash: hash('password123'), role: 'user', bio: 'Vintage tech & guitars.', banned: false, ...V });
-const sara = db.users.insert({ name: 'Sara Idris', email: 'sara@rewear.dev', passwordHash: hash('password123'), role: 'user', bio: '', banned: false, ...V });
-
-const demo = [
-  [maya, 'Mid-century walnut coffee table', 'Solid walnut, a few light scratches on top but very sturdy. Pickup only.', 120, 'Furniture', 'Good', 'Brooklyn, NY'],
-  [maya, 'IKEA desk lamp', 'Works perfectly, warm LED bulb included.', 12, 'Home', 'Like New', 'Brooklyn, NY'],
-  [leo, 'Sony WH-1000XM3 headphones', 'Excellent noise cancelling. Comes with case and cable.', 95, 'Electronics', 'Good', 'Queens, NY'],
-  [leo, 'Fender Squier Stratocaster', 'Great starter electric guitar. Set up with fresh strings.', 160, 'Other', 'Good', 'Queens, NY'],
-  [leo, 'Kindle Paperwhite (10th gen)', 'Backlit, waterproof. Battery still lasts weeks.', 55, 'Electronics', 'Like New', 'Queens, NY'],
-  [sara, 'Patagonia fleece jacket (M)', 'Cozy and barely worn. Smoke-free home.', 40, 'Clothing', 'Like New', 'Jersey City, NJ'],
-  [sara, 'Box of sci-fi paperbacks (12)', 'Asimov, Le Guin, Herbert and more. Take the lot.', 18, 'Books', 'Good', 'Jersey City, NJ'],
-  [sara, 'Wooden train set', "Kids outgrew it. Tracks + 6 carriages.", 22, 'Toys', 'Good', 'Jersey City, NJ'],
-  [maya, 'Yoga mat + blocks', 'Lightly used, cleaned and rolled.', 15, 'Sports', 'Good', 'Brooklyn, NY'],
-  [leo, 'Mechanical keyboard (brown switches)', 'Tactile and quiet-ish. USB-C, no software needed.', 48, 'Electronics', 'Good', 'Queens, NY'],
-];
-
-const products = demo.map(([seller, title, description, price, category, condition, location]) =>
-  db.products.insert({ sellerId: seller.id, title, description, price, category, condition, location, image: null, status: 'available', views: Math.floor(price) % 40 })
-);
-
-// Real demo photos (fetched from the web) bundled under public/seed-assets/.
-// Index matches the `demo` array order above. Falls back to a generated text
-// card if an asset is missing, so the seeder always works offline.
-const ASSETS_DIR = path.join(__dirname, 'public', 'seed-assets');
-const SLUGS = ['coffee-table', 'desk-lamp', 'headphones', 'guitar', 'kindle', 'fleece-jacket', 'books', 'train', 'yoga-mat', 'keyboard'];
-
-(async () => {
-  for (let i = 0; i < products.length; i++) {
-    const p = products[i];
-    let ext = '.jpg';
-    let assetPath = path.join(ASSETS_DIR, `${SLUGS[i]}.jpg`);
-    if (!fs.existsSync(assetPath)) {
-      assetPath = path.join(ASSETS_DIR, `${SLUGS[i]}.png`);
-      ext = '.png';
-    }
-    let filename, abs;
-    if (fs.existsSync(assetPath)) {
-      filename = `seed-${p.id}${ext}`;
-      abs = path.join(UPLOAD_DIR, filename);
-      fs.copyFileSync(assetPath, abs); // copy the real photo into uploads/
-    } else {
-      filename = `seed-${p.id}.png`;
-      abs = path.join(UPLOAD_DIR, filename);
-      if (!(await generatePlaceholder(p.title, p.category, abs))) continue;
-    }
-    const thumb = (await makeThumbnail(abs, filename, UPLOAD_DIR)) || `/uploads/${filename}`;
-    db.products.update(p.id, { image: `/uploads/${filename}`, thumb });
-  }
-  finish();
-})();
-
-function finish() {
-
-// A completed sale (delivered order) + review so trust scores have data.
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 const now = new Date().toISOString();
-db.products.update(products[2].id, { status: 'sold', buyerId: sara.id, soldPrice: 85, soldAt: now });
-db.orders.insert({ productId: products[2].id, buyerId: sara.id, sellerId: leo.id, amount: 85, status: 'delivered',
-  shipping: { name: 'Sara Idris', line1: '5 River Rd', city: 'Jersey City', zip: '07302', country: 'USA' },
-  payment: { brand: 'Visa', last4: '4242', paidAt: now }, shippedAt: now, deliveredAt: now });
-db.reviews.insert({ productId: products[2].id, sellerId: leo.id, buyerId: sara.id, rating: 5, comment: 'Smooth pickup, headphones are mint. Highly recommend!' });
 
-// A paid order awaiting shipment (so Maya, the seller, has something to fulfil).
-db.products.update(products[8].id, { status: 'sold', buyerId: leo.id, soldPrice: 15, soldAt: now });
-db.orders.insert({ productId: products[8].id, buyerId: leo.id, sellerId: maya.id, amount: 15, status: 'paid',
-  shipping: { name: 'Leo Park', line1: '88 Vine St', city: 'Queens', zip: '11101', country: 'USA' },
-  payment: { brand: 'Mastercard', last4: '4444', paidAt: now } });
-
-// An in-progress negotiation + chat thread.
-const convo = db.conversations.insert({ productId: products[0].id, buyerId: leo.id, sellerId: maya.id });
-db.messages.insert({ conversationId: convo.id, senderId: leo.id, text: 'Hi! Is the coffee table still available?', read: true });
-db.messages.insert({ conversationId: convo.id, senderId: maya.id, text: 'Yes it is! Happy to hold it for pickup this weekend.', read: false });
-db.offers.insert({ productId: products[0].id, buyerId: leo.id, sellerId: maya.id, amount: 100, status: 'pending', from: 'buyer' });
-
-console.log('\n  ✅ Seed complete (with generated product images).');
-console.log('  Admin login:  admin@rewear.dev / password123');
-console.log('  Users:        maya@ / leo@ / sara@ rewear.dev  (all password123)\n');
-db.flushSync(); // ensure all writes hit disk before we exit
-process.exit(0);
+// Per-product fetched photo if it exists, else the category fallback image.
+function productImage(title, fallbacks, i) {
+  const slug = slugify(title);
+  if (fs.existsSync(path.join(PRODUCTS_IMG_DIR, `${slug}.jpg`))) {
+    return `/seed-assets/products/${slug}.jpg`;
+  }
+  return fallbacks[i % fallbacks.length];
 }
+
+/* ------------------------------- users ------------------------------- */
+db.users.insert({ name: 'Site Admin', email: 'admin@rewear.dev', passwordHash: hash('password123'), role: 'admin', bio: 'Keeping ReWear friendly.', banned: false, ...V });
+
+const sellers = SELLER_DEFS.map(([name, local, city, bio]) => ({
+  user: db.users.insert({ name, email: `${local}@rewear.dev`, passwordHash: hash('password123'), role: 'user', bio, banned: false, ...V }),
+  city,
+}));
+
+/* --------------------------- insert products --------------------------- */
+const products = [];
+let idx = 0;
+for (const [category, { images, items }] of Object.entries(CATALOG)) {
+  items.forEach(([title, description, price, condition], i) => {
+    const seller = sellers[idx % sellers.length];
+    const img = productImage(title, images, i);
+    products.push(
+      db.products.insert({
+        sellerId: seller.user.id,
+        title,
+        description,
+        price,
+        category,
+        condition,
+        location: seller.city,
+        image: img,
+        thumb: img,
+        status: 'available',
+        views: Math.floor(Math.random() * 60),
+      })
+    );
+    idx += 1;
+  });
+}
+
+/* ----------------------- orders / reviews / trust ----------------------- */
+const REVIEW_COMMENTS = [
+  'Smooth transaction, item exactly as described. Highly recommend!',
+  'Fast shipping and well packaged. Thank you!',
+  'Great communication and a fair price.',
+  'Item was even better than the photos. Very happy.',
+  'Friendly seller, would buy from again.',
+  'Arrived quickly and works perfectly.',
+];
+const BRANDS = [['Visa', '4242'], ['Mastercard', '4444'], ['Amex', '0005']];
+
+function otherUser(notId) {
+  let u = pick(sellers);
+  while (u.user.id === notId) u = pick(sellers);
+  return u;
+}
+
+products.forEach((p, i) => {
+  if (i % 7 === 3) {
+    // Delivered sale + review -> populates seller trust scores.
+    const buyer = otherUser(p.sellerId);
+    const [brand, last4] = pick(BRANDS);
+    db.products.update(p.id, { status: 'sold', buyerId: buyer.user.id, soldPrice: p.price, soldAt: now });
+    db.orders.insert({
+      productId: p.id, buyerId: buyer.user.id, sellerId: p.sellerId, amount: p.price, status: 'delivered',
+      shipping: { name: buyer.user.name, line1: '1 Demo St', city: buyer.city.split(',')[0], zip: '10001', country: 'USA' },
+      payment: { brand, last4, paidAt: now }, shippedAt: now, deliveredAt: now, refundStatus: 'none',
+    });
+    db.reviews.insert({ productId: p.id, sellerId: p.sellerId, buyerId: buyer.user.id, rating: 4 + (i % 2), comment: pick(REVIEW_COMMENTS) });
+  } else if (i % 19 === 5) {
+    // Paid, awaiting shipment -> sellers have something to fulfil.
+    const buyer = otherUser(p.sellerId);
+    const [brand, last4] = pick(BRANDS);
+    db.products.update(p.id, { status: 'sold', buyerId: buyer.user.id, soldPrice: p.price, soldAt: now });
+    db.orders.insert({
+      productId: p.id, buyerId: buyer.user.id, sellerId: p.sellerId, amount: p.price, status: 'paid',
+      shipping: { name: buyer.user.name, line1: '2 Demo Ave', city: buyer.city.split(',')[0], zip: '20002', country: 'USA' },
+      payment: { brand, last4, paidAt: now }, refundStatus: 'none',
+    });
+  }
+});
+
+/* ------------------------ a couple of live threads ------------------------ */
+const open = products.filter((p) => p.status === 'available');
+for (let k = 0; k < 3; k++) {
+  const p = open[k * 5];
+  if (!p) break;
+  const buyer = otherUser(p.sellerId);
+  const convo = db.conversations.insert({ productId: p.id, buyerId: buyer.user.id, sellerId: p.sellerId });
+  db.messages.insert({ conversationId: convo.id, senderId: buyer.user.id, text: `Hi! Is the ${p.title} still available?`, read: true });
+  db.messages.insert({ conversationId: convo.id, senderId: p.sellerId, text: 'Yes it is — happy to answer any questions!', read: false });
+  db.offers.insert({ productId: p.id, buyerId: buyer.user.id, sellerId: p.sellerId, amount: Math.max(1, Math.round(p.price * 0.85)), status: 'pending', from: 'buyer' });
+}
+
+db.flushSync();
+
+const withPhoto = products.filter((p) => p.image.includes('/products/')).length;
+console.log('\n  ✅ Seed complete.');
+console.log(`     ${db.users.count()} users (1 admin + ${sellers.length} sellers)`);
+console.log(`     ${db.products.count()} products  (${db.products.count((p) => p.status === 'available')} available, ${db.products.count((p) => p.status === 'sold')} sold)`);
+console.log(`     ${withPhoto}/${products.length} products using a fetched photo (rest use category fallback)`);
+console.log(`     ${db.orders.count()} orders, ${db.reviews.count()} reviews`);
+console.log('\n  Admin login:  admin@rewear.dev / password123');
+console.log('  Any seller:   maya@ / leo@ / sara@ ... rewear.dev  (all password123)\n');
+process.exit(0);

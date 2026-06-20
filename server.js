@@ -18,6 +18,7 @@ const adminRoutes = require('./routes/admin');
 const notificationRoutes = require('./routes/notifications');
 const currencyRoutes = require('./routes/currency');
 const cartRoutes = require('./routes/cart');
+const aiRoutes = require('./routes/ai');
 
 const payments = require('./lib/payments');
 
@@ -45,12 +46,17 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/currency', currencyRoutes);
 app.use('/api/cart', cartRoutes);
+app.use('/api/ai', aiRoutes);
 
 app.get('/api/health', (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
 // Public client config — tells the frontend which payment UI to render.
 app.get('/api/config', (_req, res) => {
-  res.json({ stripeEnabled: payments.enabled, stripePublishableKey: payments.publishableKey || null });
+  res.json({
+    stripeEnabled: payments.enabled,
+    stripePublishableKey: payments.publishableKey || null,
+    aiEnabled: !!process.env.AI_SERVICE_URL, // floating AI assistant widget
+  });
 });
 
 // Multer / generic error handler.

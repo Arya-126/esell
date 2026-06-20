@@ -1,0 +1,36 @@
+# Orchestrates the ReWear app + the AI microservice on one Docker host.
+# Vectors live in Qdrant Cloud (set QDRANT_URL/QDRANT_API_KEY). Secrets come from
+# a root .env file (copy from .env.example). The AI service is internal-only —
+# only the Node app (server-to-server) talks to it.
+services:
+  rewear:
+    build: .
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      AI_SERVICE_URL: http://ai-service:8000
+      # Optional integrations:
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY:-}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data
+      - ./uploads:/app/uploads
+    depends_on:
+      - ai-service
+
+  ai-service:
+    build: ./ai-service
+    restart: unless-stopped
+    environment:
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}     # MUST match rewear's
+      REWEAR_API_URL: http://rewear:3000
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-gemini-2.0-flash}
+      EMBEDDINGS_PROVIDER: ${EMBEDDINGS_PROVIDER:-gemini}
+      QDRANT_URL: ${QDRANT_URL:?set QDRANT_URL}
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+    expose:
+      - "8000"   # internal network only — not published to the host

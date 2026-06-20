@@ -190,6 +190,15 @@ function renderNav(active) {
     setupNotifications();
     maybeShowVerifyBanner();
   }
+
+  // Load the floating AI assistant once (self-initialising; hides itself unless
+  // the AI service is enabled server-side). Works for guests and logged-in users.
+  if (!document.getElementById('aiWidgetScript')) {
+    const sc = document.createElement('script');
+    sc.id = 'aiWidgetScript';
+    sc.src = 'js/ai-widget.js';
+    document.body.appendChild(sc);
+  }
 }
 
 // Banner prompting unverified users to confirm their email.

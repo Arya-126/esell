@@ -51,6 +51,15 @@ so it installs and runs anywhere (including Windows) with no database setup.
   seller lowers the price.
 - 📊 **Fair-price indicator** — listings are flagged *Great deal / Fair / Above average*
   versus the live average price in their category.
+- 🤖 **AI shopping assistant (Advanced RAG)** — an optional floating chat widget backed by a
+  separate **FastAPI + LangGraph + Qdrant** microservice (`ai-service/`). A single
+  *Query Router* powers both a conversational **personal shopper** ("a warm winter jacket
+  under $50" → grounded product cards) and **customer support** (FAQ/policy answers +
+  "where is my order?"). Includes a **Self-RAG** loop (grades retrieved context and rewrites
+  the query on a miss) and **guardrails** for unsafe/off-topic input. Runs cost-free by
+  default (local embeddings + heuristic fallback) or with Google Gemini's free tier. The
+  widget stays hidden unless `AI_SERVICE_URL` is set, so the core app is unaffected.
+  See [ai-service/README.md](ai-service/README.md).
 
 ## Quick start
 
@@ -78,10 +87,11 @@ lib/payments.js      Stripe layer (currency-aware PaymentIntents) + demo stub
 middleware/auth.js   JWT auth (Bearer + cookie), role + verified guards
 lib/mailer.js        Email (nodemailer if SMTP_* set, else dev console)
 lib/images.js        Jimp thumbnail generation
-routes/              auth · products · cart · currency · chat · offers · orders · admin · notifications
-public/              Frontend (vanilla JS, no build step)
+routes/              auth · products · cart · currency · chat · offers · orders · admin · notifications · ai (proxy)
+public/              Frontend (vanilla JS, no build step) — incl. js/ai-widget.js
 data/                Auto-created JSON storage (git-ignore this)
 uploads/             Auto-created product images
+ai-service/          Optional Python RAG microservice (FastAPI · LangGraph · Qdrant)
 ```
 
 ## Contributing (open-source roadmap)
