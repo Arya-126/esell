@@ -12,7 +12,12 @@ const { readToken } = require('../middleware/auth');
 
 const router = express.Router();
 
-const AI_URL = () => process.env.AI_SERVICE_URL || '';
+// Normalise: Render's cross-service host refs omit the scheme — add https://.
+const AI_URL = () => {
+  let u = (process.env.AI_SERVICE_URL || '').trim();
+  if (u && !/^https?:\/\//.test(u)) u = `https://${u}`;
+  return u.replace(/\/+$/, '');
+};
 const MAX_LEN = 1000;
 
 // Tiny in-memory rate limiter: N requests per window per key (ip/user).

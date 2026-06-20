@@ -24,7 +24,7 @@ KNOWLEDGE_DIR = os.path.join(os.path.dirname(__file__), "knowledge")
 
 def fetch_products() -> list[dict]:
     s = get_settings()
-    with httpx.Client(base_url=s.rewear_api_url, timeout=20.0) as client:
+    with httpx.Client(base_url=s.rewear_base_url, timeout=20.0) as client:
         r = client.get("/api/products", params={"sort": "new"})
         r.raise_for_status()
         return r.json().get("products", [])
@@ -89,6 +89,31 @@ def index_faq(embedder) -> int:
     n = upsert(get_settings().faq_collection, items, vectors)
     print(f"  indexed {n} FAQ chunks from {len(files)} files")
     return n
+
+
+def products_count() -> int:
+    s = get_settings()
+    try:
+        client = get_client()
+        if not client.collection_exists(s.products_collection):
+            return 0
+        return client.get_collection(s.products_collection).points_count or 0
+    except Exception:
+        return 0
+
+
+def auto_index_if_empty() -> str:
+    """Index only when the products collection is empty. Returns a status string;
+    'no-products' means ReWear returned nothing yet (caller should retry)."""
+    if products_count() > 0:
+        return "already-indexed"
+    embedder = get_embedder()
+    ensure_collections(embedder.dim)
+    n = index_products(embedder)
+    if n == 0:
+        return "no-products"
+    index_faq(embedder)
+    return f"indexed {n} products"
 
 
 def main() -> None:

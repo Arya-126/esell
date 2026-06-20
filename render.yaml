@@ -1,0 +1,67 @@
+# Render Blueprint — deploys the ReWear store + the AI assistant together.
+#
+# Apply: Render Dashboard → New → Blueprint → pick this repo. Render reads this
+# file and creates both services. You'll be prompted for the three secrets
+# marked `sync: false` (Gemini + Qdrant Cloud). Everything else — including the
+# shared JWT secret and the cross-service URLs — is wired automatically.
+#
+# Vectors live in Qdrant Cloud (free tier). The AI service self-indexes the
+# catalog on first boot (AUTO_INDEX), and the store self-seeds its demo data
+# (AUTO_SEED), so no manual steps are needed after applying.
+
+services:
+  # ----------------------------- ReWear store (Node) -----------------------------
+  - type: web
+    name: rewear
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: AUTO_SEED
+        value: "true"
+      - key: JWT_SECRET
+        generateValue: true # Render generates a strong secret
+      - key: AI_SERVICE_URL # the AI service's host (scheme added in code)
+        fromService:
+          type: web
+          name: rewear-ai
+          property: host
+
+  # --------------------------- AI assistant (Python) ---------------------------
+  - type: web
+    name: rewear-ai
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./ai-service/Dockerfile
+    dockerContext: ./ai-service
+    healthCheckPath: /health
+    envVars:
+      - key: JWT_SECRET # must match the store — pulled from it
+        fromService:
+          type: web
+          name: rewear
+          envVarKey: JWT_SECRET
+      - key: REWEAR_API_URL # the store's host (scheme added in code)
+        fromService:
+          type: web
+          name: rewear
+          property: host
+      - key: LLM_MODEL
+        value: gemini-2.5-flash
+      - key: EMBEDDINGS_PROVIDER
+        value: fastembed
+      - key: AUTO_INDEX
+        value: "true"
+      # --- secrets you provide when applying the blueprint ---
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false

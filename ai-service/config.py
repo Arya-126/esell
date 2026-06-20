@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     # Must match the Node app's JWT_SECRET so we can verify forwarded tokens.
     jwt_secret: str = "rewear-dev-secret-change-me"
 
+    # Index the catalog into Qdrant on startup if the collection is empty (waits
+    # for ReWear to be reachable + seeded). Handy for a hands-off deploy.
+    auto_index: bool = False
+
     # --- Retrieval / agent behaviour ---
     top_k: int = 5
     max_rewrites: int = 2  # Self-RAG: how many times to rewrite + retry retrieval
@@ -39,6 +43,14 @@ class Settings(BaseSettings):
     @property
     def gemini_enabled(self) -> bool:
         return bool(self.google_api_key)
+
+    @property
+    def rewear_base_url(self) -> str:
+        """ReWear URL with a scheme guaranteed (Render's host refs omit https://)."""
+        u = (self.rewear_api_url or "").strip()
+        if u and not u.startswith(("http://", "https://")):
+            u = "https://" + u
+        return u.rstrip("/")
 
 
 @lru_cache

@@ -38,7 +38,7 @@ def fetch_product(product_id: str) -> dict | None:
         return None
     s = get_settings()
     try:
-        with httpx.Client(base_url=s.rewear_api_url, timeout=10.0) as client:
+        with httpx.Client(base_url=s.rewear_base_url, timeout=10.0) as client:
             r = client.get(f"/api/products/{product_id}")
             if r.status_code != 200:
                 return None
@@ -67,7 +67,7 @@ def format_product(p: dict) -> str:
 
 def fetch_my_orders(token: str) -> dict:
     s = get_settings()
-    with httpx.Client(base_url=s.rewear_api_url, timeout=10.0) as client:
+    with httpx.Client(base_url=s.rewear_base_url, timeout=10.0) as client:
         r = client.get("/api/orders/mine", headers={"Authorization": f"Bearer {token}"})
         r.raise_for_status()
         return r.json()

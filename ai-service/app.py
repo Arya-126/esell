@@ -8,6 +8,7 @@ assistant remembers earlier turns ("the jacket I mentioned").
 """
 from __future__ import annotations
 
+import asyncio
 from collections import defaultdict, deque
 
 from fastapi import FastAPI, Header, Request
@@ -17,6 +18,31 @@ from config import get_settings
 from graph import run_turn
 
 app = FastAPI(title="ReWear AI Assistant", version="1.0.0")
+
+
+@app.on_event("startup")
+async def _maybe_auto_index() -> None:
+    """When AUTO_INDEX=true, index the catalog once it's available — in the
+    background, with retries, so the service starts immediately and tolerates
+    ReWear not being seeded yet."""
+    if not get_settings().auto_index:
+        return
+
+    async def worker() -> None:
+        import indexer
+        for _ in range(20):  # ~5 min of retries
+            try:
+                res = await asyncio.to_thread(indexer.auto_index_if_empty)
+                if res != "no-products":
+                    print(f"[AUTO_INDEX] {res}")
+                    return
+                print("[AUTO_INDEX] ReWear has no products yet; retrying in 15s…")
+            except Exception as e:  # pragma: no cover
+                print(f"[AUTO_INDEX] error: {e}; retrying in 15s…")
+            await asyncio.sleep(15)
+        print("[AUTO_INDEX] gave up after retries")
+
+    asyncio.create_task(worker())
 
 # session_id -> recent (role, text) turns. Bounded so memory can't grow forever.
 _SESSIONS: dict[str, deque] = defaultdict(lambda: deque(maxlen=8))
