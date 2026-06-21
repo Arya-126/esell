@@ -59,6 +59,16 @@ def test_question_without_product_id_is_not_qa():
     assert out["route"] != "product_qa"
 
 
+# --- Custom LLM provider degrades gracefully when its server is down --------- #
+def test_custom_llm_falls_back_when_unreachable():
+    from providers import CustomHTTPLLM
+    llm = CustomHTTPLLM()
+    llm._url = "http://127.0.0.1:59999"  # nothing listening here
+    route = llm.classify_route("find me a warm jacket", "")
+    assert route in ("product_search", "order_status", "faq", "other")
+    assert llm._disabled is True  # breaker tripped, future calls use heuristic
+
+
 # --- Filter parsing --------------------------------------------------------- #
 def test_parse_filters_price_and_category():
     cat, cond, price = parse_filters("looking for a leather jacket under $50")

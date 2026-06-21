@@ -57,9 +57,10 @@ so it installs and runs anywhere (including Windows) with no database setup.
   under $50" → grounded product cards) and **customer support** (FAQ/policy answers +
   "where is my order?"). Includes a **Self-RAG** loop (grades retrieved context and rewrites
   the query on a miss) and **guardrails** for unsafe/off-topic input. Runs cost-free by
-  default (local embeddings + heuristic fallback) or with Google Gemini's free tier. The
-  widget stays hidden unless `AI_SERVICE_URL` is set, so the core app is unaffected.
-  See [ai-service/README.md](ai-service/README.md).
+  default (local embeddings + heuristic fallback), with Google Gemini, or with your **own
+  self-hosted LLM** ([`llm-api/`](llm-api) — FastAPI + HuggingFace Transformers) via a
+  pluggable provider. The widget stays hidden unless `AI_SERVICE_URL` is set, so the core
+  app is unaffected. See [ai-service/README.md](ai-service/README.md).
 
 ## Quick start
 
@@ -92,6 +93,7 @@ public/              Frontend (vanilla JS, no build step) — incl. js/ai-widget
 data/                Auto-created JSON storage (git-ignore this)
 uploads/             Auto-created product images
 ai-service/          Optional Python RAG microservice (FastAPI · LangGraph · Qdrant)
+llm-api/             Optional self-hosted LLM server (FastAPI · HuggingFace Transformers)
 ```
 
 ## Contributing (open-source roadmap)

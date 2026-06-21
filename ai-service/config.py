@@ -6,7 +6,17 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    # --- LLM (Google Gemini, free tier) ---
+    # --- LLM provider: "auto" | "custom" | "gemini" | "heuristic" ---
+    # auto picks custom (if CUSTOM_LLM_URL set) > gemini (if key) > heuristic.
+    llm_provider: str = "auto"
+    # Self-hosted model server (llm-api/) base URL, e.g. http://localhost:8001.
+    custom_llm_url: str = ""
+    # Use the custom model ONLY for the final answer; route/grade/rewrite via the
+    # fast heuristic. ~1 model call per turn instead of several — snappier and
+    # more reliable with small models.
+    custom_llm_generate_only: bool = False
+
+    # --- Google Gemini (used when provider is gemini/auto) ---
     google_api_key: str = ""
     llm_model: str = "gemini-2.5-flash"
     llm_temperature: float = 0.2
@@ -43,6 +53,14 @@ class Settings(BaseSettings):
     @property
     def gemini_enabled(self) -> bool:
         return bool(self.google_api_key)
+
+    @property
+    def custom_llm_base_url(self) -> str:
+        """Custom LLM URL with a scheme guaranteed (host refs omit https://)."""
+        u = (self.custom_llm_url or "").strip()
+        if u and not u.startswith(("http://", "https://")):
+            u = "https://" + u
+        return u.rstrip("/")
 
     @property
     def rewear_base_url(self) -> str:

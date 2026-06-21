@@ -32,13 +32,15 @@ guardrail ─▶ router ─┬─▶ product_retrieve ─▶ scorer ─┬─▶
 
 | Concern | Default | Upgrade |
 |---|---|---|
-| LLM | Heuristic rules (no key) | **Google Gemini** free tier (`GOOGLE_API_KEY`) |
+| LLM | Heuristic rules (no key) | **Google Gemini** (`GOOGLE_API_KEY`) or your **own model server** (`CUSTOM_LLM_URL`) |
 | Embeddings | **fastembed** local ONNX (no key) | Gemini `text-embedding-004` |
 | Vector DB | In-memory Qdrant | **Qdrant Cloud** (`QDRANT_URL` + key) |
 
-It runs end-to-end with zero keys for a quick demo; add the Gemini + Qdrant Cloud
-values for the full agentic experience. Set `EMBEDDINGS_PROVIDER` and `LLM_MODEL` in
-`.env`.
+The LLM is pluggable via `LLM_PROVIDER` (`auto` | `custom` | `gemini` | `heuristic`).
+Set `CUSTOM_LLM_URL` to point at your self-hosted [`llm-api/`](../llm-api) server
+(FastAPI + HuggingFace Transformers) to run your own model instead of Gemini — any
+backend failure degrades gracefully to the heuristic. It runs end-to-end with zero keys
+for a quick demo; add Gemini/custom + Qdrant Cloud for the full experience.
 
 ## Run it
 

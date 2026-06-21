@@ -52,13 +52,19 @@ services:
           type: web
           name: rewear
           property: host
+      - key: LLM_PROVIDER # auto: custom (if CUSTOM_LLM_URL set) > gemini > heuristic
+        value: auto
       - key: LLM_MODEL
         value: gemini-2.5-flash
       - key: EMBEDDINGS_PROVIDER
         value: fastembed
       - key: AUTO_INDEX
         value: "true"
-      # --- secrets you provide when applying the blueprint ---
+      # --- secrets / optional endpoints you provide ---
+      # Your self-hosted LLM (llm-api/) — e.g. a HuggingFace Space URL. Leave
+      # blank to use Gemini/heuristic. See llm-api/README.md.
+      - key: CUSTOM_LLM_URL
+        sync: false
       - key: GOOGLE_API_KEY
         sync: false
       - key: QDRANT_URL
